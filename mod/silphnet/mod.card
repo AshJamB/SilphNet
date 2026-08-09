@@ -1,0 +1,24 @@
+return {
+  summary = "See other trainers walking the same map in real time (plain-TCP, Android-friendly).",
+  author = "Ash",
+  tags = { "multiplayer", "online", "overworld", "beta" },
+  differences = {
+    added = {
+      "Background TCP client that syncs your overworld position",
+      "Remote trainers rendered as NPCs that walk in real time",
+      "SERVER HOST / PORT settings in the mod manager",
+    },
+    changed = {},
+    known = {
+      "Milestone 1 (walking skeleton): movement only - no battles, trades or chat yet",
+      "Requires a running SilphNet server (see server/silphnet_server.py)",
+      "Remote avatar sprite is fixed to SPRITE_RED for now",
+      "Remote trainers are solid; heavy lag can cause a position snap",
+    },
+  },
+  credits = {
+    { who = "bryanthaboi", for_ = "Gen1Recomp engine and its mod platform" },
+    { who = "Gamecorner33 & alamops", for_ = "Gen1Online / RBY MMO - prior art for the concept" },
+  },
+  compat = { modApi = 2 },
+}

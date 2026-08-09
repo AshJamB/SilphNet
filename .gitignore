@@ -1,0 +1,19 @@
+# SilphNet ignores
+
+# Server runtime / test artifacts
+server/*.log
+*.log
+
+# Server runtime data — NEVER commit (contains password hashes + device tokens)
+accounts.json
+players_backup.json
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS cruft
+.DS_Store
+Thumbs.db

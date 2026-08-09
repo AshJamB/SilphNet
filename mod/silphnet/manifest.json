@@ -1,0 +1,11 @@
+{
+  "id": "silphnet",
+  "name": "SilphNet",
+  "version": "0.1.0",
+  "entry": "main.lua",
+  "author": "Ash",
+  "description": "Shared overworld - see other trainers walking around the same map in real time. Milestone 1 (walking skeleton). Uses a plain-TCP connection (no HTTPS), so it works on Android as well as desktop.",
+  "category": "TOOL",
+  "api": 2,
+  "permissions": ["network"]
+}
