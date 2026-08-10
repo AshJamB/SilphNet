@@ -14,6 +14,11 @@ plus a friends list showing where they were, how long ago, and whether
 they're likely still online. There's no live, real-time movement - see
 "Why this isn't real-time" below for why that's a deliberate choice.
 
+SilphNet is free to use and the server's running costs come out of my own
+pocket - if you'd like to help keep it going, you can do so here:
+[buymeacoffee.com/ashjam](https://buymeacoffee.com/ashjam). Entirely
+optional, and much appreciated.
+
 ## How it works
 
 SilphNet talks to a small web API over plain `http://` rather than a live
