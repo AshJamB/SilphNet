@@ -5,7 +5,8 @@ return {
   differences = {
     added = {
       "Background TCP client that syncs your overworld position",
-      "Remote trainers rendered as NPCs that walk in real time - non-solid to you in both directions (movement.collision hook override), paced with a self-tracked walk-animation cooldown so a re-issued move never interrupts one still mid-stride",
+      "Remote trainers rendered as NPCs, non-solid to you in both directions (movement.collision hook override)",
+      "EXPERIMENTAL: remote trainer movement bypasses handle:scriptMove entirely (confirmed on-device as the cause of a persistent judder) and hand-tweens the walk animation by writing npc.px/py directly, mirroring the player's own Player:update() interpolation. Reaches into undocumented engine internals - see main.lua's advanceRemote/snapRemote comments. Fails closed (respawns the trainer) if those fields don't behave as expected on an engine update.",
       "SELECT:RESET on the status screen - shows a confirm screen (NAME + PASSPHRASE, so you can screenshot them first) before clearing the cached login token and going offline; B cancels with nothing changed (options/save data survives mod reinstalls, so this gives you a clean-slate test without touching phone storage). Deliberately a status-screen button, not a mod option - the Manager's own RESET DEFAULTS row loops over every option a mod defines and would otherwise trigger a reset-shaped option row as a side effect of pressing it",
     },
     changed = {},

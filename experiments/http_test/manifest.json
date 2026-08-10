@@ -1,0 +1,11 @@
+{
+  "id": "silphnet_http_test",
+  "name": "SilphNet HTTP Test",
+  "version": "0.1.0",
+  "entry": "main.lua",
+  "author": "Ash",
+  "description": "Throwaway diagnostic: checks whether this device can reach a plain http:// endpoint from inside the game (no HTTPS, no TLS). Safe to delete once answered.",
+  "category": "TOOL",
+  "api": 2,
+  "permissions": ["network"]
+}

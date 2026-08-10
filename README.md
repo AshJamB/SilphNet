@@ -145,7 +145,7 @@ Each simulated trainer logs in and then prints the other as it moves.
   `SILPHNET <n>` row from the START menu) and press **SELECT**. It shows a
   confirm screen (with your NAME and PASSPHRASE, in case you want to note
   them down) before clearing the cached device token and going offline; **B**
-  cancels with nothing changed. Flip **SILPHNET ON** off then on (or press
+  cancels with nothing changed. Flip **SILPHNET LIVE (EXPERIMENTAL)** off then on (or press
   **A** on the status screen) to log back in afterward.
 - **RESET DEFAULTS vs the status screen's RESET** → RESET DEFAULTS is a row
   the Mod Manager itself adds to every mod's options screen — it wipes ALL of
@@ -179,13 +179,41 @@ the game) — the likely first tweaks after your first on-device run:
   `src/core/Game.lua`) keeps firing every fixed-step tick in your build — it's
   real and present in engine source but isn't in the curated wiki hook
   reference, so it's worth re-checking after an engine update;
-- `MOVE_ANIM_TICKS = 16` (the assumed per-tile walk-animation length for a
-  scripted NPC) — this is what paces how fast a remote trainer is allowed to
-  take its next step; if trainers still look like they're being "warped"
-  between tiles rather than walked, this number is the first thing to try
-  adjusting.
+- **`advanceRemote`'s direct field writes** (`npc.cellX`/`cellY`/`px`/`py`/`facing`)
+  — see "Remote trainer movement is experimental" below. These field names
+  are inferred from `src/world/Player.lua`'s own convention; the on-device
+  test confirmed they exist and matter for this engine build, but that
+  could still change on an engine update.
 
 If something misbehaves, the `[silphnet]` manager errors will point right at it.
+
+## Remote trainer movement is experimental right now
+
+On-device testing tracked a persistent walk judder down further than any
+other fix here got: it correlated exactly with `handle:scriptMove` being
+actively called on a remote trainer, and stopped the instant that peer went
+idle — strong evidence `scriptMove` itself carries a real per-call cost
+inside the engine. The function it calls into is real but sits in a source
+file this session's tooling couldn't fully fetch, so the *exact* cause inside
+it was never pinned down — only the correlation with calling it at all.
+
+**Confirmed on-device:** bypassing `scriptMove` entirely and writing the
+NPC's position fields directly eliminated the judder. `main.lua` now hand-rolls
+the walk animation itself instead of ever calling `scriptMove` again —
+`advanceRemote` tweens `npc.px`/`py` toward the target tile over 16 ticks
+(`MOVE_ANIM_TICKS`, matching `Player.lua`'s own `STEP_FRAMES`), the same way
+the player's own movement code interpolates in `Player:update()`, only
+flipping `npc.cellX`/`cellY` to the destination once the tween completes.
+
+This is still **unsupported**: it reaches past the documented `Handle` API
+(`scriptMove`/`marchInPlace`/`face`/`position`) into the raw NPC table —
+exactly what `Reference-Mod-Object.md` calls out as unsupported engine
+internals. Every write stays behind a `pcall`; a failure invalidates the
+handle and falls back to the existing stuck-counter respawn, not a crash —
+worst case a trainer stops animating and gets briefly respawned. If an
+engine update ever changes these field names, that respawn-loop behavior
+(rather than a crash) is what you'd see, and it'd be a signal to come back
+to this section.
 
 ## Remote trainers are non-solid to you (both directions)
 

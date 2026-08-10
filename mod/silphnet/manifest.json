@@ -1,7 +1,7 @@
 {
   "id": "silphnet",
   "name": "SilphNet",
-  "version": "0.10.0",
+  "version": "0.13.0-experimental",
   "entry": "main.lua",
   "author": "Ash",
   "description": "Shared overworld with accounts - see other trainers walking around the same map in real time, logged in behind a name+passphrase account. Uses a plain-TCP connection (no HTTPS), so it works on Android as well as desktop.",

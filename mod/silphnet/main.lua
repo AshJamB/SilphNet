@@ -45,7 +45,15 @@ return function(mod)
 
   pcall(function()
     mod.options:define({
-      { key = "enabled",    type = "toggle", label = "SILPHNET ON", default = true },
+      -- Off by default: this is the experimental real-time live-position
+      -- feature (a live TCP thread + spawnNpc + a hand-rolled walk tween
+      -- reaching into unsupported engine internals - see the "Remote
+      -- trainer movement is experimental" section of README.md). It's an
+      -- opt-in extra now, not the mod's main purpose - that's shifting
+      -- toward an async, MySQL-backed "last known sighting" model instead
+      -- (no live socket, no per-tick engine hooks, none of the judder/
+      -- collision problems this real-time path fought all session).
+      { key = "enabled",    type = "toggle", label = "SILPHNET LIVE (EXPERIMENTAL)", default = false },
       { key = "name",       type = "text",   label = "MY NAME",     default = "", maxLen = FIELD_MAXLEN["MY NAME"] },
       { key = "passphrase", type = "text",   label = "PASSPHRASE",  default = "", maxLen = FIELD_MAXLEN["PASSPHRASE"] },
     })
@@ -290,6 +298,10 @@ return function(mod)
   end
 
   -- ---- remote trainers ------------------------------------------------------
+  -- Currently unused now that advanceRemote snaps position directly instead
+  -- of calling scriptMove(dir, ...) - kept for a follow-up that adds real
+  -- pixel interpolation on top of the snap (see snapRemote below), which
+  -- would need a direction again to tween px/py toward the target tile.
   local function stepDir(dx, dy)
     if dx == 1 and dy == 0 then return "right" end
     if dx == -1 and dy == 0 then return "left" end
@@ -332,29 +344,6 @@ return function(mod)
   end
   local function despawnAll() for id in pairs(remotes) do despawnRemote(id) end end
 
-  -- Gen 1's overworld walks one tile in a fixed number of ticks (movement
-  -- speed hooks bend this for the PLAYER - running shoes, bike - but a
-  -- scripted NPC step has no such hook and no documented way to query "is
-  -- this NPC still mid-stride" from mod code; handle:position() reports the
-  -- DESTINATION tile the instant scriptMove is issued, not once the visual
-  -- animation actually finishes, same as the player's own cellX/cellY do.
-  -- Every earlier fix here (moving work off the draw hook, caching NPC
-  -- handles, cutting per-frame allocation, fixing collision) left this
-  -- judder untouched because none of them addressed it: the real bug was
-  -- trusting position() as a "done, safe to move again" signal. If a new
-  -- peer update arrived before the prior scriptMove's ~16-tick walk
-  -- animation had actually finished playing, we'd re-issue scriptMove on
-  -- the same NPC mid-stride, snapping/restarting its animation - and doing
-  -- that to an entity sharing the same frame as the player is exactly the
-  -- kind of hitch that would show up as BOTH characters juddering at once.
-  -- Tracking the animation's remaining duration ourselves (ticked once per
-  -- input.step, independent of what position() reports) means we simply
-  -- never issue a second move before the first one is visually done.
-  -- << VERIFY >> exact per-tile tick count for a scripted NPC walk;
-  -- adjust MOVE_ANIM_TICKS if trainers still look "warped" rather than
-  -- walked once this is confirmed on-device.
-  local MOVE_ANIM_TICKS = 16
-
   local function spawnRemote(id, name, sprite, x, y, facing)   -- << VERIFY >> objDef shape
     local objDef = { index = allocIndex(id), x = x, y = y, sprite = sprite or MY_SPRITE,
                      movement = "STAY", range = "NONE", name = "SILPHNET_" .. id }
@@ -363,14 +352,13 @@ return function(mod)
     remotes[id] = { name = name, sprite = sprite, npcId = npcId,
                     shownX = x, shownY = y, targetX = x, targetY = y,
                     facing = facing, targetFacing = facing,
-                    stuck = 0, handle = nil, cooldown = 0 }
+                    stuck = 0, handle = nil, animProgress = 0 }
     local h = getHandle(id); if h then pcall(h.face, h, facing) end
   end
 
   -- Cheap and network-driven: just records where the server says this peer
-  -- IS now. Never calls scriptMove directly - advanceRemote (below) is the
-  -- only thing that moves a trainer, paced by its own cooldown regardless
-  -- of how often updates arrive.
+  -- IS now. Never moves anything directly - advanceRemote (below) is the
+  -- only thing that moves a trainer.
   local function applyPeer(id, name, sprite, x, y, facing)
     local r = remotes[id]
     if not r then spawnRemote(id, name, sprite, x, y, facing); return end
@@ -378,44 +366,120 @@ return function(mod)
     r.targetX, r.targetY, r.targetFacing = x, y, facing
   end
 
-  -- Advances (at most) one queued tile-step per remote per tick, but only
-  -- once the previous step's walk animation has had time to actually
-  -- finish (see MOVE_ANIM_TICKS above) - this is what actually paces
-  -- movement to the animation instead of to whenever a network update
-  -- happens to land.
-  local function advanceRemote(id, r)
-    if r.cooldown and r.cooldown > 0 then
-      r.cooldown = r.cooldown - 1
-      return
-    end
-    if r.targetX == r.shownX and r.targetY == r.shownY then
-      if r.targetFacing and r.targetFacing ~= r.facing then
-        local h = getHandle(id)
-        local okf = h and pcall(h.face, h, r.targetFacing)
-        if not okf then invalidateHandle(id) end
-        r.facing = r.targetFacing
-      end
-      r.stuck = 0
-      return
-    end
-    local dir = stepDir(r.targetX - r.shownX, r.targetY - r.shownY)
+  -- ---- EXPERIMENTAL: bypass scriptMove, hand-roll the walk tween --------
+  -- CONFIRMED on-device (v0.11.0-experimental): bypassing handle:scriptMove
+  -- and writing the NPC's position fields directly eliminated the judder
+  -- that survived every earlier fix here - scriptMove itself really was
+  -- the cause. That build snapped tile-to-tile with no walk animation as
+  -- the trade-off; this restores the animation ourselves instead of ever
+  -- calling scriptMove again, by tweening npc.px/py exactly the way the
+  -- player's own movement does (src/world/Player.lua Player:update():
+  -- cellX/cellY hold the OLD tile for the whole step, px/py interpolate
+  -- toward the new one over STEP_FRAMES=16 ticks, and cellX/cellY only
+  -- flip to the destination once the tween completes).
+  --
+  -- Still UNSUPPORTED: this reaches past the documented Handle API
+  -- (scriptMove/marchInPlace/face/position) into the raw npc table -
+  -- Reference-Mod-Object.md calls exactly this kind of reach-in
+  -- "unsupported engine internals." Field names (cellX/cellY/px/py/facing)
+  -- are confirmed to exist and matter for THIS engine build (v0.11.0-
+  -- experimental's snap was visibly correct on-device), but could still
+  -- change on an engine update with no warning beyond a mod-manager error.
+  -- Every write stays behind a pcall; a failure invalidates the handle and
+  -- falls through to the existing stuck-counter respawn, same as any other
+  -- handle failure - worst case is a trainer that stops animating and gets
+  -- respawned, never a crash.
+  local MOVE_ANIM_TICKS = 16   -- matches Player.lua's STEP_FRAMES
+
+  local function snapRemote(id, x, y, facing)
     local h = getHandle(id)
-    if dir and h then
-      local okm = pcall(h.scriptMove, h, dir, 1)
-      if okm then
-        r.shownX, r.shownY, r.facing = r.targetX, r.targetY, r.targetFacing
-        r.cooldown = MOVE_ANIM_TICKS
+    if not h or not h.npc then invalidateHandle(id); return false end
+    local ok = pcall(function()
+      h.npc.cellX, h.npc.cellY = x, y
+      h.npc.px, h.npc.py = x * 16, y * 16
+      h.npc.facing = facing
+    end)
+    if not ok then invalidateHandle(id); return false end
+    return true
+  end
+
+  -- Advances one in-flight tween tick, or starts a new one. Only one
+  -- tile-move animates at a time per remote; anything queued in
+  -- targetX/Y/Facing (see applyPeer) is picked up once the current tween
+  -- finishes, same "at most one move in flight" pacing the old
+  -- cooldown-based version had - just driven by our own tween progress
+  -- instead of a fixed timer.
+  local function advanceRemote(id, r)
+    local h = getHandle(id)
+    if not h or not h.npc then
+      invalidateHandle(id)
+      r.stuck = (r.stuck or 0) + 1
+      if r.stuck > STUCK_TICKS then
+        local name, sprite, tx, ty, tf = r.name, r.sprite, r.targetX, r.targetY, r.targetFacing
+        despawnRemote(id)
+        spawnRemote(id, name, sprite, tx, ty, tf)
+      end
+      return
+    end
+
+    -- Not mid-tween: either apply a pending facing-only update, start a
+    -- new tile move, or do nothing. Starting a move falls straight through
+    -- into the tween step below instead of returning, so the first
+    -- visible movement happens on the SAME tick the move is requested
+    -- (setting animProgress here and returning would waste a tick doing
+    -- nothing visible before the tween actually starts advancing).
+    if not r.animProgress or r.animProgress <= 0 then
+      if r.targetX == r.shownX and r.targetY == r.shownY then
+        if r.targetFacing and r.targetFacing ~= r.facing then
+          local okf = pcall(h.face, h, r.targetFacing)
+          if not okf then invalidateHandle(id) end
+          r.facing = r.targetFacing
+        end
         r.stuck = 0
         return
       end
-      invalidateHandle(id)
+
+      local dx, dy = r.targetX - r.shownX, r.targetY - r.shownY
+      -- The server only ever sends whole-tile positions, so a normal step
+      -- is exactly one tile in one axis. If a missed/coalesced update ever
+      -- made this more than one tile away, animating it as a single
+      -- 16-tick step would look like teleporting-in-slow-motion, not
+      -- walking - snap straight there instead, same as the stuck-timeout
+      -- respawn path does.
+      if math.abs(dx) > 1 or math.abs(dy) > 1 then
+        if snapRemote(id, r.targetX, r.targetY, r.targetFacing) then
+          r.shownX, r.shownY, r.facing = r.targetX, r.targetY, r.targetFacing
+          r.stuck = 0
+        else
+          r.stuck = (r.stuck or 0) + 1
+        end
+        return
+      end
+
+      local okf = pcall(function() h.npc.facing = r.targetFacing end)
+      if not okf then invalidateHandle(id); return end
+      r.animFromX, r.animFromY = r.shownX, r.shownY
+      r.animDX, r.animDY = dx, dy
+      r.shownX, r.shownY, r.facing = r.targetX, r.targetY, r.targetFacing
+      r.animProgress = 0   -- becomes 1 in the tween step immediately below
     end
-    r.stuck = (r.stuck or 0) + 1
-    if r.stuck > STUCK_TICKS then
-      local name, sprite, tx, ty, tf = r.name, r.sprite, r.targetX, r.targetY, r.targetFacing
-      despawnRemote(id)
-      spawnRemote(id, name, sprite, tx, ty, tf)
-    end
+
+    -- One tween step, covering both a move that just started above and one
+    -- already in flight from a previous tick.
+    r.animProgress = r.animProgress + 1
+    local done = r.animProgress >= MOVE_ANIM_TICKS
+    local ok = pcall(function()
+      if done then
+        h.npc.cellX, h.npc.cellY = r.shownX, r.shownY
+        h.npc.px, h.npc.py = r.shownX * 16, r.shownY * 16
+      else
+        local px = math.floor(r.animProgress * 16 / MOVE_ANIM_TICKS)
+        h.npc.px = r.animFromX * 16 + r.animDX * px
+        h.npc.py = r.animFromY * 16 + r.animDY * px
+      end
+    end)
+    if not ok then invalidateHandle(id); return end
+    if done then r.animProgress = 0; r.stuck = 0 end
   end
 
   local function advanceAllRemotes()
