@@ -308,6 +308,24 @@ def broadcaster():
             send_line(p.conn, p.send_lock, f"S|{p.map}|{peers}")
 
 
+def status_printer():
+    """Prints who's currently connected every few seconds - a live console
+    view for testing, so you don't have to guess whether a client is really
+    online and where. Purely diagnostic; does not affect the protocol."""
+    while True:
+        time.sleep(5.0)
+        now = time.time()
+        with _players_lock:
+            snapshot = list(_players.values())
+        if not snapshot:
+            print("[status] nobody connected")
+            continue
+        for p in snapshot:
+            where = f"{p.map} ({p.x},{p.y}) facing {p.facing}" if p.map else "NO POSITION YET"
+            age = now - p.last_seen
+            print(f"[status] {p.name} ({p.pid}) - {where} - last update {age:.1f}s ago")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -326,6 +344,7 @@ def main():
     srv.listen(64)
 
     threading.Thread(target=broadcaster, daemon=True).start()
+    threading.Thread(target=status_printer, daemon=True).start()
 
     print("=" * 62)
     print(" SilphNet relay server  (Milestone 1 + Phase 1 accounts)")

@@ -69,20 +69,29 @@ IP as the server host.
 Enable **SilphNet** in the Mod Manager. It will ask to allow the `network`
 permission.
 
-### 3. Point the mod at your server
+### 3. Set your name and passphrase
 
-In the Mod Manager → **SilphNet** options:
+The server address is **baked into the mod** (`SERVER_HOST`/`SERVER_PORT` at
+the top of `main.lua`) — there's no HOST/PORT field to fill in, so a fresh
+install just works. If the server ever moves, that's a one-line code change
+and a rebuild, not something players configure.
 
-- **SERVER HOST** = your PC's IPv4 (e.g. `192.168.1.50`), **SERVER PORT** =
-  `7788`.
-- If entering dots is fiddly on the phone, turn on **HOST AS NUMBERS** and fill
-  the four **HOST NUM** boxes (`192`, `168`, `1`, `50`).
+In the Mod Manager → **SilphNet** options, **MY NAME** and **PASSPHRASE** open
+the classic Game Boy letter-grid when you press **A** on them. Gen 1's naming
+screen has no digits by default, so this mod adds a **0–9 row** to that grid —
+but only when one of these two fields is open; every other naming screen in
+the game (Pokémon nicknames, your trainer name, etc.) stays exactly vanilla.
 
-Also set **MY NAME** and a **PASSPHRASE** — that's your account. The first time
-you connect with a name it's created; after that the passphrase proves it and a
-device token is cached so you don't retype it. On another device, enter the same
-name + passphrase to log into the same account. The passphrase is verified by a
-SHA-256 challenge and **never sent in the clear** (see `SECURITY.md`). One
+1. Press **A** on **MY NAME** (or **PASSPHRASE**) to open the entry screen.
+2. Use the D-pad to reach the new digits row if you need a number, **A** to
+   pick each character.
+3. Press **START** (or select **ED**) to confirm.
+
+MY NAME + PASSPHRASE together are your account. The first time you connect
+with a name it's created; after that the passphrase proves it and a device
+token is cached so you don't retype it. On another device, enter the same
+name + passphrase to log into the same account. The passphrase is verified by
+a SHA-256 challenge and **never sent in the clear** (see `SECURITY.md`). One
 caveat for now: the passphrase is stored in the mod's options on the device —
 fine for personal use; Phase 2 moves logins to a website so it isn't.
 
@@ -91,7 +100,9 @@ fine for personal use; Phase 2 moves logins to a website so it isn't.
 Load a save and walk around Pallet Town. Anyone else connected to the same
 server on the same map appears and moves in real time. Open **START** — the menu
 shows `SILPHNET <n>` (trainers nearby), `SILPHNET ...` while connecting/logging
-in, or `SILPHNET OFF` if it hasn't reached the server.
+in, or `SILPHNET OFF` if it hasn't reached the server. Select that row to open a
+status screen (name, status, server, port) with **A** to retry the connection,
+**B** to go back, and **SELECT** to force a clean re-login (see Troubleshooting).
 
 **Seeing movement needs two clients.** With a single device you'll connect, log
 in, and see `SILPHNET 0` (nobody else there yet) — which already confirms the
@@ -111,17 +122,42 @@ Each simulated trainer logs in and then prints the other as it moves.
 
 ## Troubleshooting
 
-- **`SILPHNET OFF`** → the client couldn't reach the server. Check the
-  host/port, that the server is running, that you're on the same network (or the
-  VPS IP is right), and that the firewall allows the port. The server prints a
-  line whenever a client connects and logs in — watch its console (or
-  `journalctl -u silphnet -f` on a VPS) to see whether your phone gets through.
+- **`SILPHNET OFF`** → the client couldn't reach the server. Check that the
+  server is running, that your phone/PC is on the same network as the address
+  baked into `main.lua` (or the VPS IP is right), and that the firewall allows
+  the port. The server prints a line whenever a client connects and logs in —
+  watch its console (or `journalctl -u silphnet -f` on a VPS) to see whether
+  your phone gets through.
 - **`SILPHNET SET NAME/PASS`** → set MY NAME and a PASSPHRASE in the mod
   options; that pair is your account.
 - **`SILPHNET LOGIN FAIL`** → wrong passphrase for an existing name, or the name
   is already taken by someone else. Change it in the options and it retries.
 - **Mod errors** → the Mod Manager lists them per-mod, prefixed `[silphnet]`.
   Those messages are the fastest way to iterate.
+- **Can't type numbers in a field / it caps at 7 characters** → older builds
+  of this mod hit that (the naming grid has no digits by default). Reinstall
+  the latest `dist/silphnet.zip` — it adds a digits row for MY NAME and
+  PASSPHRASE specifically.
+- **Need to switch servers** → the server address is compiled into the mod
+  (`SERVER_HOST`/`SERVER_PORT` at the top of `main.lua`); changing it means a
+  one-line edit and rebuild, not an in-game setting.
+- **Force a clean re-login** → open the SilphNet status screen (select the
+  `SILPHNET <n>` row from the START menu) and press **SELECT**. It shows a
+  confirm screen (with your NAME and PASSPHRASE, in case you want to note
+  them down) before clearing the cached device token and going offline; **B**
+  cancels with nothing changed. Flip **SILPHNET ON** off then on (or press
+  **A** on the status screen) to log back in afterward.
+- **RESET DEFAULTS vs the status screen's RESET** → RESET DEFAULTS is a row
+  the Mod Manager itself adds to every mod's options screen — it wipes ALL of
+  this mod's options (name, passphrase, the enabled toggle) back to
+  blank/default in one go, with **no confirmation**, and there's no way to
+  remove or disable that row. It used to also trigger our own reset as an
+  unwanted side effect, back when RESET was a fourth option row here (the
+  Manager's RESET DEFAULTS loops over every option a mod defines) — that's
+  why RESET now lives on the status screen (SELECT) instead of in the options
+  list, where the two can no longer collide. If you just want name/passphrase
+  wiped, RESET DEFAULTS does that (bluntly); if you want to force a fresh
+  login while keeping your name/passphrase, use SELECT on the status screen.
 
 ## What's verified vs. what to check on-device
 
@@ -139,18 +175,47 @@ the game) — the likely first tweaks after your first on-device run:
 
 - the remote-trainer `sprite` id (`SPRITE_RED`) and the exact `spawnNpc`
   object fields;
-- that `render.letterbox` is an acceptable per-frame tick in your build.
+- that `input.step` (the engine's per-tick hook for "tool" mods, see
+  `src/core/Game.lua`) keeps firing every fixed-step tick in your build — it's
+  real and present in engine source but isn't in the curated wiki hook
+  reference, so it's worth re-checking after an engine update;
+- `MOVE_ANIM_TICKS = 16` (the assumed per-tile walk-animation length for a
+  scripted NPC) — this is what paces how fast a remote trainer is allowed to
+  take its next step; if trainers still look like they're being "warped"
+  between tiles rather than walked, this number is the first thing to try
+  adjusting.
 
 If something misbehaves, the `[silphnet]` manager errors will point right at it.
+
+## Remote trainers are non-solid to you (both directions)
+
+Remote trainers are rendered with `mod.world:spawnNpc`, which by default
+joins the engine's normal NPC collision list (`OverworldState.entities`, see
+`src/world/OverworldController.lua`) — every same-map NPC is solid to the
+*player's own* movement there, with no field on the NPC object itself to opt
+out. Rather than abandon `spawnNpc` for a hand-drawn sprite overlay (losing
+the walk-cycle animation it gives for free), this wraps the engine's
+documented `movement.collision` hook (`src/world/Collision.lua`,
+"World" section of the hook reference): whenever your own move gets blocked
+specifically because a remote trainer is standing on the target tile, the
+hook overrides that one verdict to "allowed." Walls, water and map edges are
+untouched — only a block whose reason is "an entity is there" gets
+reconsidered, and only when that entity is one of ours. Verified with a
+stubbed engine run (four cases: blocked-by-remote-trainer → allowed,
+blocked-by-something-elsewhere → still blocked, blocked-by-wall → still
+blocked even at the same coordinates, already-allowed → unaffected).
 
 ## Roadmap
 
 1. ✅ Shared overworld
 2. ✅ Accounts — name + passphrase, SHA-256 challenge-response, device tokens (Phase 1)
-3. In-game chat overlay
-4. Avatar selection
-5. Face-to-face trade / battle requests (relayed through the engine's `LinkBattle`)
-6. Website accounts on Supabase + pairing login (Phase 2); always-on internet server
+3. ✅ Status screen (name / status / server / reconnect) from the START menu
+4. In-game chat overlay
+5. Avatar selection
+6. Face-to-face trade / battle requests (relayed through the engine's `LinkBattle`)
+7. Website accounts on Supabase + pairing login (Phase 2); a default server baked
+   into the mod so nobody has to type a host/port at all — see "No more typing
+   a server address" below; always-on internet server
 
 See `ACCOUNTS.md` for the account design and `SECURITY.md` for the security model.
 

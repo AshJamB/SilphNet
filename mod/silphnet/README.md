@@ -1,28 +1,36 @@
 # SilphNet (mod)
 
-See other trainers walking around the same map in real time. This is
-**Milestone 1** — a "walking skeleton" that proves live multiplayer works in
-Gen1Recomp, **including on Android**, by using a plain-TCP connection instead
-of HTTPS.
+See other trainers walking around the same map in real time, behind an
+account that follows you across devices/reinstalls. Uses a plain-TCP
+connection instead of HTTPS, which is why it works **on Android** too
+(LÖVE 11 has no TLS there).
 
 ## Try it
 
 1. Start a SilphNet server somewhere reachable (see `../../server/`):
    `python3 silphnet_server.py`
-2. Install this `silphnet` folder as a mod and enable it in the Mod Manager.
-3. In the Mod Manager, open **SilphNet** options and set **SERVER HOST** (and
-   **SERVER PORT**, default 7788) to the machine running the server. If typing
-   an IP with dots is awkward, turn on **HOST AS NUMBERS** and use the four
-   **HOST NUM** boxes instead.
+2. Install this `silphnet` folder (or `dist/silphnet.zip`) as a mod and
+   enable it in the Mod Manager.
+3. Open **SilphNet** options. Press **A** on a field to open the Game Boy
+   letter-grid entry screen. This mod adds a **0–9** row to that grid for
+   its own four fields only (everywhere else in the game stays vanilla):
+   - **SERVER HOST** / **SERVER PORT** — where the server is (`.` lives in
+     the symbols row just above "ED").
+   - **MY NAME** / **PASSPHRASE** — your account. First login on a name
+     creates it; later logins prove it with a hashed challenge (the
+     passphrase is never sent in the clear) and a device token is cached so
+     you don't retype it every launch.
 
-Then load a save and walk around. Anyone else connected to the same server and
-standing on the same map appears as a trainer and moves in real time. Open the
-**START** menu to see `SILPHNET <n>` (how many trainers are nearby) or
-`SILPHNET OFF` if it hasn't connected.
+Then load a save and walk around. Anyone else connected to the same server on
+the same map appears and moves in real time. Open **START** to see
+`SILPHNET <n>` (trainers nearby), `SILPHNET SET NAME/PASS` /
+`SILPHNET LOGIN FAIL` if login needs attention, or `SILPHNET OFF` if it hasn't
+connected.
 
 ## Notes
 
 - Needs the `network` permission (declared) because it opens a socket.
-- No HTTPS/TLS is used on purpose — that is what makes it work on Android,
-  where LÖVE 11 has no SSL.
-- Movement only for now. Battles, trades and chat are later milestones.
+- No HTTPS/TLS is used on purpose — see `../../SECURITY.md` for what that
+  trades away and how logins stay safe anyway.
+- Movement + accounts only for now. Chat, avatars, trades and battles are
+  later milestones — see `../../README.md`.

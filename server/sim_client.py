@@ -17,6 +17,7 @@ Prints RESULT=... and (on success) TOKEN=... for scripted chaining.
 import argparse
 import hashlib
 import secrets
+import select
 import socket
 import time
 
@@ -83,20 +84,27 @@ def main():
     send(f"P|{args.map}|{x}|{args.y}|down")
     deadline = time.time() + args.seconds
     step, seen, next_move = 0, set(), time.time() + 0.4
+    # NOTE: deliberately not using sock.settimeout() here. Python's
+    # socket.makefile() "poisons" itself the first time a read times out -
+    # every read after that raises a plain OSError instead of
+    # socket.timeout/TimeoutError, so a try/except around readline() stops
+    # catching anything and the script crashes. select.select() lets us wait
+    # up to `remaining` seconds for data WITHOUT ever touching the socket's
+    # own timeout, so readline() is only called once we already know data
+    # (or EOF) is waiting.
     while time.time() < deadline:
-        sock.settimeout(0.3)
-        try:
+        remaining = max(0.0, min(0.3, deadline - time.time()))
+        ready, _, _ = select.select([sock], [], [], remaining)
+        if ready:
             line = rfile.readline().strip()
-        except socket.timeout:
-            line = ""
-        if line.startswith("S|"):
-            _, _m, rest = line.split("|", 2)
-            for chunk in filter(None, rest.split(";")):
-                pid, name, sprite, px, py, facing = chunk.split(",")
-                tag = f"{name}@({px},{py})"
-                if tag not in seen:
-                    seen.add(tag)
-                    print(f"[{args.name}] sees peer: {tag}")
+            if line.startswith("S|"):
+                _, _m, rest = line.split("|", 2)
+                for chunk in filter(None, rest.split(";")):
+                    pid, name, sprite, px, py, facing = chunk.split(",")
+                    tag = f"{name}@({px},{py})"
+                    if tag not in seen:
+                        seen.add(tag)
+                        print(f"[{args.name}] sees peer: {tag}")
         if step < args.steps and time.time() >= next_move:
             x += 1; step += 1
             send(f"P|{args.map}|{x}|{args.y}|right")

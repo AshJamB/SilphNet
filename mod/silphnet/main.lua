@@ -27,19 +27,58 @@ return function(mod)
   local KEEPALIVE   = 1.0
   local STUCK_TICKS = 20
 
+  -- Release build ships against one known server - no HOST/PORT fields in
+  -- the menu to fumble on a phone keyboard. Change these two lines and
+  -- rebuild if the server ever moves.
+  local SERVER_HOST = "192.168.40.7"
+  local SERVER_PORT = 7788
+
+  -- Text fields default to Gen 1's classic 7-char name cap and the naming
+  -- grid has no digits at all (vanilla trainer names never needed them) - so
+  -- typing a passphrase with numbers in it couldn't be done however long the
+  -- field was. maxLen asks for a longer field (the engine reads it straight
+  -- off this row: see ManagerState.buildOptionRows, `maxLen = row.maxLen or
+  -- 7`); the ui.naming.grid hook below adds a 0-9 row when one of THESE
+  -- fields is the one open. See README.md for exactly how to enter it
+  -- in-game. << VERIFY >> on real hardware.
+  local FIELD_MAXLEN = { ["MY NAME"] = 10, ["PASSPHRASE"] = 12 }
+
   pcall(function()
     mod.options:define({
-      { key = "enabled",    type = "toggle", label = "SILPHNET ON",     default = true },
-      { key = "name",       type = "text",   label = "MY NAME",         default = "" },
-      { key = "passphrase", type = "text",   label = "PASSPHRASE",      default = "" },
-      { key = "host",       type = "text",   label = "SERVER HOST",     default = "192.168.1.100" },
-      { key = "port",       type = "number", label = "SERVER PORT",     default = 7788, min = 1, max = 65535, step = 1 },
-      { key = "use_octets", type = "toggle", label = "HOST AS NUMBERS", default = false },
-      { key = "o1", type = "number", label = "HOST NUM 1", default = 192, min = 0, max = 255, step = 1 },
-      { key = "o2", type = "number", label = "HOST NUM 2", default = 168, min = 0, max = 255, step = 1 },
-      { key = "o3", type = "number", label = "HOST NUM 3", default = 1,   min = 0, max = 255, step = 1 },
-      { key = "o4", type = "number", label = "HOST NUM 4", default = 100, min = 0, max = 255, step = 1 },
+      { key = "enabled",    type = "toggle", label = "SILPHNET ON", default = true },
+      { key = "name",       type = "text",   label = "MY NAME",     default = "", maxLen = FIELD_MAXLEN["MY NAME"] },
+      { key = "passphrase", type = "text",   label = "PASSPHRASE",  default = "", maxLen = FIELD_MAXLEN["PASSPHRASE"] },
     })
+  end)
+  -- Deliberately NOT a fourth "reset" option row here (an earlier build had
+  -- one). The Manager auto-appends its own RESET DEFAULTS row to every
+  -- mod's options screen, and its RESET DEFAULTS loops through this exact
+  -- schema and fires mod.options_changed once per row, using each row's own
+  -- `default` - including a "reset" row, if one existed here. That meant
+  -- pressing the engine's RESET DEFAULTS also fired OUR reset handler as a
+  -- side effect (confirm screen and all), while simultaneously wiping
+  -- NAME/PASSPHRASE to blank unconditionally and before that confirm screen
+  -- even showed - so declining our confirm did nothing to undo the part
+  -- RESET DEFAULTS had already done. Two reset-shaped things sharing one
+  -- options schema always collide like this. The reset action lives on the
+  -- SilphNetStatus screen instead (SELECT), which the Manager's options
+  -- reset can't reach at all.
+
+  -- Add a digits row (and keep the existing "." for the host field) to the
+  -- naming-grid screen, but ONLY when it's one of our own fields open -
+  -- every other naming screen in the game (trainer name, nicknames, ...)
+  -- must stay exactly vanilla.
+  pcall(function()
+    mod.hooks:wrap("ui.naming.grid", function(nextFn, grid, ctx)
+      grid = nextFn(grid, ctx)
+      local title = ctx and ctx.title
+      local isOurs = title and FIELD_MAXLEN[title:gsub("%?$", "")] ~= nil
+      if not isOurs or type(grid) ~= "table" then return grid end
+      local out = {}
+      for i, row in ipairs(grid) do out[i] = row end
+      table.insert(out, math.max(1, #out), { "0","1","2","3","4","5","6","7","8","9" })
+      return out
+    end)
   end)
 
   local function opt(key, default)
@@ -130,6 +169,7 @@ return function(mod)
   local authState = "idle"          -- idle|need_creds|wait_tok|wait_chal|wait_auth|wait_reg|authed|failed
   local accountId, myName, myPass
   local myMap, myX, myY, myFacing
+  local inOverworld = false
   local sinceKeepalive = 0
   local peerCount = 0
 
@@ -144,12 +184,12 @@ return function(mod)
     return s
   end
 
-  local function resolveHost()
-    if opt("use_octets", false) then
-      return string.format("%d.%d.%d.%d", opt("o1",192), opt("o2",168), opt("o3",1), opt("o4",100))
-    end
-    return opt("host", "192.168.1.100")
-  end
+  -- Hardcoded (see SERVER_HOST/SERVER_PORT at the top) - kept as functions
+  -- rather than inlining the constants everywhere so the status screen and
+  -- reconnect() don't need to change if this ever needs to read from
+  -- somewhere else again (e.g. a baked-in default with an override).
+  local function resolveHost() return SERVER_HOST end
+  local function resolvePort() return SERVER_PORT end
 
   local function randByte()
     if love.math and love.math.random then return love.math.random(0, 255) end
@@ -261,52 +301,127 @@ return function(mod)
     if not idToIndex[id] then idToIndex[id] = nextIndex; nextIndex = nextIndex + 1 end
     return idToIndex[id]
   end
-  local function getHandle(id)
-    local ok, h = pcall(function() return mod.world:npc(myMap, "SILPHNET_" .. id) end)
+  -- `mod.world:npc()` does a linear scan of every NPC on the map (see the
+  -- engine's WorldAPI), so calling it fresh on every position update - once
+  -- or twice per peer per tick while they're moving - is wasted repeat work.
+  -- Resolve the handle ONCE at spawn time and cache it on the remote's
+  -- entry; only re-resolve if a cached call actually fails.
+  -- pcall(fn, args...) below (never pcall(function() fn(args) end)) - the
+  -- latter allocates a brand-new throwaway closure on every single call,
+  -- which in the hot per-peer-update path means real, avoidable GC
+  -- pressure landing right when a stutter would be most visible.
+  local function lookupHandle(id)
+    local ok, h = pcall(mod.world.npc, mod.world, myMap, "SILPHNET_" .. id)
     if ok then return h end
     return nil
   end
+  local function getHandle(id)
+    local r = remotes[id]
+    if not r then return lookupHandle(id) end
+    if not r.handle then r.handle = lookupHandle(id) end
+    return r.handle
+  end
+  local function invalidateHandle(id)
+    local r = remotes[id]
+    if r then r.handle = nil end
+  end
   local function despawnRemote(id)
     local r = remotes[id]
-    if r and r.npcId ~= nil then pcall(function() mod.world:removeNpc(r.npcId) end) end
+    if r and r.npcId ~= nil then pcall(mod.world.removeNpc, mod.world, r.npcId) end
     remotes[id] = nil
   end
   local function despawnAll() for id in pairs(remotes) do despawnRemote(id) end end
+
+  -- Gen 1's overworld walks one tile in a fixed number of ticks (movement
+  -- speed hooks bend this for the PLAYER - running shoes, bike - but a
+  -- scripted NPC step has no such hook and no documented way to query "is
+  -- this NPC still mid-stride" from mod code; handle:position() reports the
+  -- DESTINATION tile the instant scriptMove is issued, not once the visual
+  -- animation actually finishes, same as the player's own cellX/cellY do.
+  -- Every earlier fix here (moving work off the draw hook, caching NPC
+  -- handles, cutting per-frame allocation, fixing collision) left this
+  -- judder untouched because none of them addressed it: the real bug was
+  -- trusting position() as a "done, safe to move again" signal. If a new
+  -- peer update arrived before the prior scriptMove's ~16-tick walk
+  -- animation had actually finished playing, we'd re-issue scriptMove on
+  -- the same NPC mid-stride, snapping/restarting its animation - and doing
+  -- that to an entity sharing the same frame as the player is exactly the
+  -- kind of hitch that would show up as BOTH characters juddering at once.
+  -- Tracking the animation's remaining duration ourselves (ticked once per
+  -- input.step, independent of what position() reports) means we simply
+  -- never issue a second move before the first one is visually done.
+  -- << VERIFY >> exact per-tile tick count for a scripted NPC walk;
+  -- adjust MOVE_ANIM_TICKS if trainers still look "warped" rather than
+  -- walked once this is confirmed on-device.
+  local MOVE_ANIM_TICKS = 16
+
   local function spawnRemote(id, name, sprite, x, y, facing)   -- << VERIFY >> objDef shape
     local objDef = { index = allocIndex(id), x = x, y = y, sprite = sprite or MY_SPRITE,
                      movement = "STAY", range = "NONE", name = "SILPHNET_" .. id }
-    local ok, npcId = pcall(function() return mod.world:spawnNpc(myMap, objDef) end)
+    local ok, npcId = pcall(mod.world.spawnNpc, mod.world, myMap, objDef)
     if not ok then mod.log:warn("spawnNpc failed for %s: %s", tostring(id), tostring(npcId)); return end
-    remotes[id] = { name = name, sprite = sprite, npcId = npcId, shownX = x, shownY = y,
-                    facing = facing, stuck = 0 }
-    local h = getHandle(id); if h then pcall(function() h:face(facing) end) end
+    remotes[id] = { name = name, sprite = sprite, npcId = npcId,
+                    shownX = x, shownY = y, targetX = x, targetY = y,
+                    facing = facing, targetFacing = facing,
+                    stuck = 0, handle = nil, cooldown = 0 }
+    local h = getHandle(id); if h then pcall(h.face, h, facing) end
   end
+
+  -- Cheap and network-driven: just records where the server says this peer
+  -- IS now. Never calls scriptMove directly - advanceRemote (below) is the
+  -- only thing that moves a trainer, paced by its own cooldown regardless
+  -- of how often updates arrive.
   local function applyPeer(id, name, sprite, x, y, facing)
     local r = remotes[id]
     if not r then spawnRemote(id, name, sprite, x, y, facing); return end
     r.name, r.sprite = name, sprite
-    if x == r.shownX and y == r.shownY then
-      if facing ~= r.facing then
-        local h = getHandle(id); if h then pcall(function() h:face(facing) end) end
-        r.facing = facing
-      end
-      r.stuck = 0; return
+    r.targetX, r.targetY, r.targetFacing = x, y, facing
+  end
+
+  -- Advances (at most) one queued tile-step per remote per tick, but only
+  -- once the previous step's walk animation has had time to actually
+  -- finish (see MOVE_ANIM_TICKS above) - this is what actually paces
+  -- movement to the animation instead of to whenever a network update
+  -- happens to land.
+  local function advanceRemote(id, r)
+    if r.cooldown and r.cooldown > 0 then
+      r.cooldown = r.cooldown - 1
+      return
     end
-    local dir = stepDir(x - r.shownX, y - r.shownY)
+    if r.targetX == r.shownX and r.targetY == r.shownY then
+      if r.targetFacing and r.targetFacing ~= r.facing then
+        local h = getHandle(id)
+        local okf = h and pcall(h.face, h, r.targetFacing)
+        if not okf then invalidateHandle(id) end
+        r.facing = r.targetFacing
+      end
+      r.stuck = 0
+      return
+    end
+    local dir = stepDir(r.targetX - r.shownX, r.targetY - r.shownY)
     local h = getHandle(id)
     if dir and h then
-      local cx, cy; local okp = pcall(function() cx, cy = h:position() end)
-      if okp and cx == r.shownX and cy == r.shownY then
-        pcall(function() h:scriptMove(dir, 1) end)
-        r.shownX, r.shownY, r.facing, r.stuck = x, y, facing, 0
-      else
-        r.stuck = (r.stuck or 0) + 1
-        if r.stuck > STUCK_TICKS then despawnRemote(id); spawnRemote(id, name, sprite, x, y, facing) end
+      local okm = pcall(h.scriptMove, h, dir, 1)
+      if okm then
+        r.shownX, r.shownY, r.facing = r.targetX, r.targetY, r.targetFacing
+        r.cooldown = MOVE_ANIM_TICKS
+        r.stuck = 0
+        return
       end
-    else
-      despawnRemote(id); spawnRemote(id, name, sprite, x, y, facing)
+      invalidateHandle(id)
+    end
+    r.stuck = (r.stuck or 0) + 1
+    if r.stuck > STUCK_TICKS then
+      local name, sprite, tx, ty, tf = r.name, r.sprite, r.targetX, r.targetY, r.targetFacing
+      despawnRemote(id)
+      spawnRemote(id, name, sprite, tx, ty, tf)
     end
   end
+
+  local function advanceAllRemotes()
+    for id, r in pairs(remotes) do advanceRemote(id, r) end
+  end
+
   local function applyState(line)
     local mapId, rest = string.match(line, "^S|([^|]*)|(.*)$")
     if not mapId or mapId ~= myMap then return end
@@ -323,8 +438,19 @@ return function(mod)
     peerCount = 0; for _ in pairs(remotes) do peerCount = peerCount + 1 end
   end
 
-  -- ---- per-frame pump -------------------------------------------------------
-  local function pump()
+  -- ---- per-tick pump ----------------------------------------------------
+  -- Runs off `input.step` (Game:step, src/core/Game.lua), NOT the draw-only
+  -- render.letterbox hook this used to piggyback on. input.step fires every
+  -- deterministic FixedStep logic tick, before drawing, unconditionally
+  -- regardless of what's on screen - it's the engine's real per-tick
+  -- extension point for exactly this kind of background "tool" mod (see the
+  -- comment at Game:step's call site). Mutating world state (spawning/
+  -- moving remote trainers) from the correct update-time slot, instead of
+  -- mid-draw, is the architecturally correct fix for the frame stutter that
+  -- showed up specifically whenever a peer moved. It isn't in the curated
+  -- wiki hook reference (undocumented, but real and present in engine
+  -- source) - << VERIFY >> this keeps working across engine updates.
+  local function pump(dt)
     local d = DBG:pop()
     while d do
       if d == "connected" then connected = true; beginAuth()
@@ -341,24 +467,36 @@ return function(mod)
     end
 
     if not silphOn then return end
-    local cur = mod.world and mod.world:current()
-    if not cur then return end
     if not authed then return end
 
-    if cur.mapId ~= myMap then
-      despawnAll()
-      myMap, myX, myY, myFacing = cur.mapId, cur.x, cur.y, cur.facing
-      sendPos()
-    elseif cur.x ~= myX or cur.y ~= myY or cur.facing ~= myFacing then
-      myX, myY, myFacing = cur.x, cur.y, cur.facing
+    -- Position sync is primarily EVENT-driven (world.stepped / map.entered,
+    -- wired below) - immediate, no polling. mod.world:current() allocates a
+    -- fresh table on every call (see the engine's WorldAPI:current()), so
+    -- it's only polled once a second here, as a safety net for anything an
+    -- event might miss (e.g. turning in place without moving a tile).
+    dt = dt or 1/60
+    sinceKeepalive = sinceKeepalive + dt
+    if sinceKeepalive >= KEEPALIVE then
+      sinceKeepalive = 0
+      if inOverworld then
+        local cur = mod.world and mod.world:current()
+        if cur then
+          if cur.mapId ~= myMap then
+            despawnAll(); myMap, myX, myY, myFacing = cur.mapId, cur.x, cur.y, cur.facing
+          elseif cur.x ~= myX or cur.y ~= myY or cur.facing ~= myFacing then
+            myX, myY, myFacing = cur.x, cur.y, cur.facing
+          end
+        end
+      end
       sendPos()
     end
 
-    local dt = (love.timer and love.timer.getDelta and love.timer.getDelta()) or 0.016
-    sinceKeepalive = sinceKeepalive + dt
-    if sinceKeepalive >= KEEPALIVE then sinceKeepalive = 0; sendPos() end
-
-    if latestState then applyState(latestState) end
+    if inOverworld and latestState then applyState(latestState) end
+    -- Runs every tick regardless of whether a new S| line arrived this
+    -- tick - a remote's queued move (recorded by applyPeer/applyState above)
+    -- gets played out at its own paced cooldown, not bursty with however
+    -- often the network happens to deliver updates.
+    if inOverworld then advanceAllRemotes() end
   end
 
   local function statusLabel()
@@ -370,12 +508,122 @@ return function(mod)
   end
 
   local function reconnect()
-    authed, authState = false, "idle"
+    authed, authState, connected = false, "idle", false
     despawnAll()
     myName = sanitizeName(opt("name", "")) or (game and game.save and game.save.player and sanitizeName(game.save.player.name))
     myPass = opt("passphrase", "") or ""
-    CTL:push({ cmd = "connect", host = resolveHost(), port = opt("port", 7788) })
+    -- The thread only opens a NEW socket when it isn't already connected
+    -- (see THREAD_SRC), so a bare "connect" while already connected is a
+    -- silent no-op - the old session just sits there while we've locally
+    -- marked ourselves unauthed and stopped sending positions, and it times
+    -- out server-side ~20s later. Force-close first so "connect" actually
+    -- re-dials.
+    CTL:push({ cmd = "disconnect" })
+    CTL:push({ cmd = "connect", host = resolveHost(), port = resolvePort() })
   end
+
+  local function statusText()
+    if authed then return "ONLINE " .. peerCount end
+    if authState == "need_creds" then return "SET NAME/PASS" end
+    if authState == "failed" then return "LOGIN FAILED" end
+    if connected then return "LOGGING IN.." end
+    return "OFFLINE"
+  end
+
+  -- Actually performs the reset (called only after the confirm screen's
+  -- A press - see SilphNetResetConfirm below). Clears the cached device
+  -- token (not the name/passphrase option values) and then goes OFFLINE
+  -- rather than immediately reconnecting - the token you just wiped would
+  -- otherwise silently re-auth using the passphrase a second later, which
+  -- defeats the point of a deliberate reset action. Flip SILPHNET ON off
+  -- then on again (or hit A on the status screen) when you're ready to log
+  -- back in.
+  -- << VERIFY >> mod.options only documents :define/:get, not :set
+  -- (Reference-Mod-Object.md), so there is no supported way for the mod
+  -- itself to flip the "SILPHNET ON" row's displayed value to OFF here -
+  -- only the actual connection goes offline. The row may still visibly
+  -- read ON in the Manager until you touch it yourself; silphOn (internal)
+  -- is what actually gates reconnecting.
+  local function performReset()
+    pcall(function() mod.save:set("token", nil) end)
+    pcall(function() mod.save:set("tokenName", nil) end)
+    mod.log:info("SilphNet: reset confirmed - cleared cached token, going offline")
+    silphOn = false
+    CTL:push({ cmd = "disconnect" })
+    authed, authState, connected = false, "idle", false
+    despawnAll()
+  end
+
+  -- ---- status + reset-confirm screens (Tutorial 11: screens registry) --------
+  -- Registered here (not at the top of the file) so the closures below
+  -- capture the *local* state variables declared above as upvalues, rather
+  -- than resolving to globals - Lua binds a `local` lexically from the point
+  -- it's declared, so a function literal written earlier in the file could
+  -- not see these. Registration itself still runs once, synchronously,
+  -- during this same entry-chunk call, which is all "entry-chunk-only"
+  -- requires. << VERIFY >> mod.content.screens / mod.ui.push on-device.
+  pcall(function()
+    mod.content.screens:register("SilphNetStatus", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          local input = g.input
+          if input:wasPressed("a") then reconnect() end
+          if input:wasPressed("b") then g.stack:pop() end
+          -- RESET lives here, on SELECT, rather than as a mod option - the
+          -- Manager's own RESET DEFAULTS row loops over every option this
+          -- mod defines and fires mod.options_changed for each one, so a
+          -- "reset" option row got triggered as an unwanted side effect of
+          -- pressing that unrelated engine button (see the options:define
+          -- comment above). A button on our own screen has no such seam.
+          if input:wasPressed("select") then mod.ui.push(g, "SilphNetResetConfirm") end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("SILPHNET", 16, 8)
+          Font.draw("NAME   " .. (myName or "----"), 16, 32)
+          Font.draw("STATUS " .. statusText(), 16, 48)
+          Font.draw("SERVER " .. tostring(resolveHost()), 16, 64)
+          Font.draw("PORT   " .. tostring(resolvePort()), 16, 80)
+          Font.draw("A:RECONNECT", 16, 112)
+          Font.draw("B:BACK", 16, 120)
+          Font.draw("SELECT:RESET", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Shown instead of resetting immediately when SELECT is pressed on the
+  -- status screen - gives you a chance to screenshot your NAME + PASSPHRASE
+  -- (both already stored in plaintext locally; this doesn't expose
+  -- anything new to anyone but you) before the cached login token is
+  -- cleared. B cancels with no changes made at all.
+  pcall(function()
+    mod.content.screens:register("SilphNetResetConfirm", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          local input = g.input
+          if input:wasPressed("a") then performReset(); g.stack:pop() end
+          if input:wasPressed("b") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("RESET SILPHNET?", 16, 8)
+          Font.draw("NAME   " .. (myName or "----"), 16, 32)
+          Font.draw("PASS   " .. (myPass ~= "" and myPass or "----"), 16, 48)
+          Font.draw("SCREENSHOT NOW", 16, 72)
+          Font.draw("IF YOU NEED THIS", 16, 88)
+          Font.draw("A:CONFIRM RESET", 16, 120)
+          Font.draw("B:CANCEL", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
 
   -- ---- wiring ---------------------------------------------------------------
   mod.events:on("game.ready", function(ev)
@@ -384,13 +632,12 @@ return function(mod)
     math.randomseed(os.time() + math.floor((os.clock() or 0) * 1000))
     if not silphOn then mod.log:info("disabled in options"); return end
     reconnect()
-    mod.log:info("connecting to %s:%s", tostring(resolveHost()), tostring(opt("port", 7788)))
+    mod.log:info("connecting to %s:%s", tostring(resolveHost()), tostring(resolvePort()))
   end)
 
   mod.events:on("mod.options_changed", function(ev)
     local k = ev and ev.key
-    if k == "host" or k == "port" or k == "use_octets" or k == "o1" or k == "o2"
-       or k == "o3" or k == "o4" or k == "name" or k == "passphrase" or k == "enabled" then
+    if k == "name" or k == "passphrase" or k == "enabled" then
       silphOn = opt("enabled", true) and true or false
       if silphOn then reconnect() else CTL:push({ cmd = "disconnect" }); authed = false; despawnAll() end
     end
@@ -398,13 +645,14 @@ return function(mod)
 
   mod.events:on("map.entered", function(ev)
     despawnAll()
+    inOverworld = true
     myMap = ev.mapId
     local cur = mod.world:current()
     if cur then myX, myY, myFacing = cur.x, cur.y, cur.facing end
     sendPos()
   end)
 
-  mod.events:on("map.exited", function() despawnAll() end)
+  mod.events:on("map.exited", function() inOverworld = false; despawnAll() end)
 
   mod.events:on("world.stepped", function(ev)
     myMap, myX, myY = ev.mapId, ev.x, ev.y
@@ -412,15 +660,72 @@ return function(mod)
     sendPos()
   end)
 
-  mod.hooks:wrap("render.letterbox", function(nextFn, ctx)
-    nextFn(ctx)
-    pcall(pump)
+  -- input.step (Game:step) fires every deterministic FixedStep logic tick,
+  -- BEFORE drawing, unconditionally (overworld, battle, menu, cutscene -
+  -- see src/core/Game.lua). It's undocumented in the curated wiki hook
+  -- reference but real and present in engine source, explicitly meant for
+  -- "tool mods" (autoplay/accessibility/input drivers) that "act on the same
+  -- fixed-step boundary as a physical controller" - which matches our own
+  -- manifest category ("TOOL") exactly. Running our world-mutating network
+  -- sync here, instead of inside the draw-only render.letterbox hook we used
+  -- previously, keeps that work out of the draw pipeline entirely, which is
+  -- the real fix for the stutter that only showed up while a peer moved.
+  -- << VERIFY >> input.step isn't in Reference-Hooks.md; recheck this call
+  -- site if the engine is updated.
+  mod.hooks:wrap("input.step", function(nextFn, g, dt)
+    pcall(pump, dt)
+    return nextFn(g, dt)
   end)
 
   mod.hooks:wrap("ui.start_menu.items", function(nextFn, g, items)
     pcall(function()
-      mod.ui.insertBefore(items, "QUIT", { label = statusLabel(), onSelect = reconnect })
+      mod.ui.insertBefore(items, "QUIT", { label = statusLabel(),
+        onSelect = function() mod.ui.push(g, "SilphNetStatus") end })
     end)
     return nextFn(g, items)
+  end)
+
+  -- Remote trainers are rendered with mod.world:spawnNpc, which is a real
+  -- NPC on the map's collision list (src/world/OverworldController.lua:
+  -- self.entities = { player } .. self.npcs) - so by default they're solid
+  -- to the PLAYER's own movement (blocked step + bump sound), the same as
+  -- any vanilla trainer NPC, even though their own scripted walking doesn't
+  -- collision-check the player back (that asymmetry is what made BOB able
+  -- to walk through you while you couldn't walk through him).
+  --
+  -- Rather than abandon spawnNpc for a hand-drawn sprite overlay (losing
+  -- the walk-cycle animation, facing, etc. it gives for free, and needing
+  -- our own camera-to-screen math with no documented accessor for it),
+  -- this uses the engine's own movement.collision hook
+  -- (src/world/Collision.lua: Collision.canMove) - the single, documented
+  -- seam for exactly this ("World" section, Reference-Hooks.md). It fires
+  -- with the reason a move was allowed/blocked (bounds/tile/entity) and can
+  -- rewrite the verdict. We only flip a "blocked by an entity standing
+  -- there" verdict, and only when that entity's cell is one of OUR remote
+  -- trainers' last-known positions (tracked in `remotes` already, for
+  -- their own movement) - never when it's a wall/water/out-of-bounds, so
+  -- this can't let anyone walk through terrain. A tile a live NPC is
+  -- standing on is walkable by construction, so "entity" is the only
+  -- possible reason the engine could have blocked a step onto exactly that
+  -- tile, and that's the one situation we choose to allow.
+  --
+  -- This doesn't gate on WHO is moving (ctx.mover) - the mod API exposes no
+  -- way to compare that against "the player" by identity - so any other
+  -- NPC's scripted movement would also be free to step onto a remote
+  -- trainer's tile. That's a harmless side effect (it already happens the
+  -- other direction - remote trainers walk through the player - and a
+  -- wandering vanilla NPC gliding past a remote trainer instead of pacing
+  -- into it is arguably an improvement), not something worth restricting
+  -- given the API has no cheaper way to check it.
+  mod.hooks:wrap("movement.collision", function(nextFn, allowed, ctx)
+    allowed = nextFn(allowed, ctx)
+    if not allowed and ctx and ctx.reason == "entity" then
+      for _, r in pairs(remotes) do
+        if r.shownX == ctx.toX and r.shownY == ctx.toY then
+          return true
+        end
+      end
+    end
+    return allowed
   end)
 end
