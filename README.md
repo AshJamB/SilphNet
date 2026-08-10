@@ -1,12 +1,17 @@
 # SilphNet
 
-A multiplayer layer for [Pokémon Gen 1 Recomp](https://github.com/bryanthaboi/gen1recomp) —
-built so it works **on Android**, not just desktop.
+An async multiplayer presence layer for [Pokémon Gen 1 Recomp](https://github.com/bryanthaboi/gen1recomp) —
+built so it works **on Android**, not just desktop, and needs no server of
+your own left running.
 
-**Status: Milestone 1 (shared overworld) + Phase 1 (accounts) — built and
-tested.** Trainers connected to the same server see each other walk the same
-map in real time, behind a login that follows them across devices and
-reinstalls. Chat, avatars, trading and battles are later milestones.
+**Status: v1.1.0 — async presence + friends, added in-game.** Log in with a
+name and password to get a unique 5-digit Trainer ID, then add friends
+entirely in-game by entering their Trainer ID on a D-pad digit spinner — no
+typing, no web page. The game periodically reports where you were last seen;
+friends show up as static "last known position" markers on the map, plus a
+friends list showing where they were, how long ago, and whether they're
+likely still online. There's no live/real-time movement — see "Why this
+isn't real-time" below for why that trade-off was made deliberately.
 
 ## Why this works on Android (when Gen1Online doesn't)
 
@@ -14,48 +19,71 @@ Gen1Recomp runs on LÖVE 11, whose Android build has **no TLS/SSL**. The
 existing Gen1Online mod talks to its server over `https://`, so on Android the
 request dies before it leaves the app — that's the "CANNOT CONNECT" you hit.
 
-SilphNet instead uses a **plain-TCP** protocol. Raw sockets are bundled on
-every LÖVE platform and are *not* subject to Android's cleartext-traffic rule
-(that only applies to Java's HTTP stack). No certificates, no luasec — it just
-works, on phone and PC alike. The trade-off is that traffic isn't encrypted,
-which is fine for a fan overworld that only exchanges positions and a chosen
-trainer name.
+SilphNet instead uses **plain `http://`**. LuaSocket's `socket.http` module
+opens a raw socket directly rather than going through Android's Java HTTP
+stack (`HttpURLConnection`/`okhttp`) — which is specifically what Android's
+cleartext-traffic block targets — so plain HTTP gets through even though
+HTTPS can't. Confirmed on-device against a real endpoint before any of this
+was built on top of it (see `experiments/http_test/`).
+
+## Why this isn't real-time
+
+An earlier version of this mod had a live, real-time overworld: a background
+TCP relay so you'd see friends walking around in real time, the same way
+Gen1Online works when it works. That needed a persistent server process
+running *somewhere* at all times — either a home PC left on 24/7, or a paid
+VPS — which didn't fit the goal of running entirely on ordinary PHP+MySQL
+web hosting. It also fought a persistent movement judder that traced back to
+the game engine's own `handle:scriptMove` having a real per-call cost, never
+fully resolved cleanly across several rounds of fixes.
+
+SilphNet now does the opposite trade-off on purpose: no live movement, no
+server process, nothing running unless you're actively playing. Friends
+appear as a **static snapshot** of where they were a little while ago, not a
+live avatar — closer to "last seen" on a messaging app than to seeing them
+walk in real time. The old real-time code is kept in `archive/tcp_relay_retired/`
+in case it's ever worth revisiting.
 
 ## Layout
 
 ```
-mod/silphnet/         the LÖVE mod (install this into the game's mods/ folder)
-  main.lua            client: TCP thread, login (challenge-response), remote trainers
-  manifest.json       declares the "network" permission
-  mod.card            manager detail card
-dist/silphnet.zip     the mod, zipped and ready to install
+mod/silphnet/           the LÖVE mod (install this into the game's mods/ folder)
+  main.lua               client: HTTP login, presence ping/poll, friend markers
+  manifest.json          declares the "network" permission
+  mod.card               manager detail card
+dist/silphnet.zip        the mod, zipped and ready to install
 server/
-  silphnet_server.py  the relay + account server (Python 3, standard library only)
-  sim_client.py       a dev tool that fakes a trainer, to test the server
-  silphnet.service    systemd unit for running it on a VPS
-  DEPLOY.md           how to host it on a cheap Linux VPS (+ scaling notes)
-ACCOUNTS.md           the account model (in-game now, website login later)
-SECURITY.md           what the no-TLS trade-off means and how logins stay safe
+  web/                   the PHP + MySQL API (all you need to host - no VPS, no persistent process)
+    schema.sql            run once in phpMyAdmin to create the tables
+    db.php                DB connection - edit DB_PASS here, never commit it
+    register.php          create an account (name + password -> account_id + token)
+    login.php             log in with name + password -> account_id + token
+    login_token.php        re-authenticate with a cached token (no retyping)
+    ping.php               report your last-known position (requires a token)
+    friends.php            fetch your friends' last-known positions (requires a token)
+    add_friend.php          send a friend request by name
+    accept_friend.php       accept an incoming friend request
+archive/tcp_relay_retired/  the old real-time TCP relay - retired, kept for reference
+experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works on Android
+ACCOUNTS.md               the account model (now web/MySQL-backed)
+SECURITY.md               what plain-HTTP + password hashing means for safety
 ```
 
 ## Quick start
 
-### 1. Run the server (a PC on your Wi-Fi, or a VPS)
+### 1. Set up the database (once)
 
-```
-cd server
-python3 silphnet_server.py          # listens on 0.0.0.0:7788
-```
+You need a MySQL database (via cPanel/phpMyAdmin or similar) and somewhere
+to host five small PHP files — most ordinary shared web hosting works,
+nothing beyond PHP + MySQL is required.
 
-On a PC, find its LAN address so your phone can reach it:
-
-- Windows: `ipconfig` → the **IPv4 Address** under your Wi-Fi adapter, e.g.
-  `192.168.1.50`. If Windows Firewall prompts, allow Python on **Private
-  networks** (or open inbound TCP 7788).
-
-To host it so it's reachable from anywhere and stays up, put it on a cheap Linux
-VPS instead — see [server/DEPLOY.md](server/DEPLOY.md). Then use the VPS's public
-IP as the server host.
+1. In phpMyAdmin, run `server/web/schema.sql` against your database to
+   create the `accounts`, `sessions`, `presence`, and `friends` tables.
+2. Upload everything in `server/web/` to your site (e.g. `yoursite.com/api/`).
+3. Edit `db.php` **on the server** to set `DB_USER`/`DB_PASS` to your real
+   database credentials — never commit real credentials to git.
+4. In `mod/silphnet/main.lua`, set `API_BASE` at the top to your site's
+   `/api` URL, then rebuild `dist/silphnet.zip`.
 
 ### 2. Install the mod
 
@@ -63,187 +91,117 @@ IP as the server host.
   `dist/silphnet.zip` from the in-game Mod Manager.
 - **Android:** get `dist/silphnet.zip` onto the phone (cloud drive, USB,
   whatever's easy) and install it from the in-game Mod Manager. Because this
-  repo is private, the manager's "install from GitHub" won't reach it — use the
-  zip.
+  repo is private, the manager's "install from GitHub" won't reach it — use
+  the zip.
 
 Enable **SilphNet** in the Mod Manager. It will ask to allow the `network`
 permission.
 
-### 3. Set your name and passphrase
+### 3. Log in
 
-The server address is **baked into the mod** (`SERVER_HOST`/`SERVER_PORT` at
-the top of `main.lua`) — there's no HOST/PORT field to fill in, so a fresh
-install just works. If the server ever moves, that's a one-line code change
-and a rebuild, not something players configure.
-
-In the Mod Manager → **SilphNet** options, **MY NAME** and **PASSPHRASE** open
+In the Mod Manager → **SilphNet** options, **MY NAME** and **PASSWORD** open
 the classic Game Boy letter-grid when you press **A** on them. Gen 1's naming
 screen has no digits by default, so this mod adds a **0–9 row** to that grid —
 but only when one of these two fields is open; every other naming screen in
 the game (Pokémon nicknames, your trainer name, etc.) stays exactly vanilla.
 
-1. Press **A** on **MY NAME** (or **PASSPHRASE**) to open the entry screen.
-2. Use the D-pad to reach the new digits row if you need a number, **A** to
-   pick each character.
-3. Press **START** (or select **ED**) to confirm.
+The first time you log in with a new name, an account is created
+automatically — there's no separate signup step. After that, the same name +
+password logs into the same account from any device. A session token is
+cached locally so you don't have to retype your password every launch;
+changing MY NAME or PASSWORD in the options forces a fresh login.
 
-MY NAME + PASSPHRASE together are your account. The first time you connect
-with a name it's created; after that the passphrase proves it and a device
-token is cached so you don't retype it. On another device, enter the same
-name + passphrase to log into the same account. The passphrase is verified by
-a SHA-256 challenge and **never sent in the clear** (see `SECURITY.md`). One
-caveat for now: the passphrase is stored in the mod's options on the device —
-fine for personal use; Phase 2 moves logins to a website so it isn't.
+Your password is hashed (bcrypt) before it's ever stored — nobody, including
+the account owner running the database, can look up the original password
+from it. See `SECURITY.md`.
 
-### 4. Play
+On first login, you're also assigned a unique **Trainer ID** — a random
+5-digit number (00000–65535, the same range the mainline games use) shown on
+the status screen. Share it with a friend (in person, over chat — however
+you'd like) so they can add you.
 
-Load a save and walk around Pallet Town. Anyone else connected to the same
-server on the same map appears and moves in real time. Open **START** — the menu
-shows `SILPHNET <n>` (trainers nearby), `SILPHNET ...` while connecting/logging
-in, or `SILPHNET OFF` if it hasn't reached the server. Select that row to open a
-status screen (name, status, server, port) with **A** to retry the connection,
-**B** to go back, and **SELECT** to force a clean re-login (see Troubleshooting).
+### 4. Add friends and check the status screen
 
-**Seeing movement needs two clients.** With a single device you'll connect, log
-in, and see `SILPHNET 0` (nobody else there yet) — which already confirms the
-server, login and networking all work. To watch trainers move, add a second
-client: a mate's phone, another device, or the game on PC once you install it.
+Open **START** — the menu shows `SILPHNET <name>` once logged in, or a
+status message otherwise (`SILPHNET SET NAME/PASS`, `SILPHNET LOGIN FAIL`,
+`SILPHNET ...` while logging in). Select that row for the status screen:
 
-You can prove the server works with no game at all:
+- **A** — retry login
+- **START** — open the friends list (name, online/offline, last-known map +
+  tile, how long ago, game version)
+- **RIGHT** — open Add Friend (enter a Trainer ID with a digit spinner: **UP/DOWN**
+  changes the selected digit, **LEFT/RIGHT** moves the cursor, **A** sends the request)
+- **LEFT** — open pending friend requests (shown when REQUESTS > 0; page
+  through with **LEFT/RIGHT**, **A** to accept)
+- **SELECT** — reset (clears the cached login on this device only)
+- **B** — back
 
-```
-cd server
-python3 silphnet_server.py &
-python3 sim_client.py --auth register --name ALICE --password test --map PALLET_TOWN
-python3 sim_client.py --auth register --name BOB   --password test --map PALLET_TOWN  # another terminal
-```
+No typing and no web page needed — adding a friend is entirely a Trainer ID
+number entry, in-game. Once accepted, they'll show up in the friends list
+and, if you're standing on their last-known map, as a static marker on the
+ground.
 
-Each simulated trainer logs in and then prints the other as it moves.
+### 5. Play
+
+Every ~30 seconds while you're in the overworld, the mod reports your
+current map/tile to the server and fetches your friends' last-known
+positions back. If a friend's last-known map matches the one you're
+standing on, a static, non-animated marker appears at their last-known
+tile — it never moves on its own; if they move, the marker just relocates
+once on the next poll, not tweened or animated.
 
 ## Troubleshooting
 
-- **`SILPHNET OFF`** → the client couldn't reach the server. Check that the
-  server is running, that your phone/PC is on the same network as the address
-  baked into `main.lua` (or the VPS IP is right), and that the firewall allows
-  the port. The server prints a line whenever a client connects and logs in —
-  watch its console (or `journalctl -u silphnet -f` on a VPS) to see whether
-  your phone gets through.
-- **`SILPHNET SET NAME/PASS`** → set MY NAME and a PASSPHRASE in the mod
+- **`SILPHNET OFF` / `SILPHNET LOGIN FAIL`** → check `API_BASE` in
+  `main.lua` points at your real API URL, that the PHP files are uploaded
+  and reachable over plain `http://` (not force-redirected to https), and
+  that `db.php`'s credentials are correct on the server.
+- **`SILPHNET SET NAME/PASS`** → set MY NAME and a PASSWORD in the mod
   options; that pair is your account.
-- **`SILPHNET LOGIN FAIL`** → wrong passphrase for an existing name, or the name
-  is already taken by someone else. Change it in the options and it retries.
 - **Mod errors** → the Mod Manager lists them per-mod, prefixed `[silphnet]`.
-  Those messages are the fastest way to iterate.
-- **Can't type numbers in a field / it caps at 7 characters** → older builds
-  of this mod hit that (the naming grid has no digits by default). Reinstall
-  the latest `dist/silphnet.zip` — it adds a digits row for MY NAME and
-  PASSPHRASE specifically.
-- **Need to switch servers** → the server address is compiled into the mod
-  (`SERVER_HOST`/`SERVER_PORT` at the top of `main.lua`); changing it means a
-  one-line edit and rebuild, not an in-game setting.
-- **Force a clean re-login** → open the SilphNet status screen (select the
-  `SILPHNET <n>` row from the START menu) and press **SELECT**. It shows a
-  confirm screen (with your NAME and PASSPHRASE, in case you want to note
-  them down) before clearing the cached device token and going offline; **B**
-  cancels with nothing changed. Flip **SILPHNET LIVE (EXPERIMENTAL)** off then on (or press
-  **A** on the status screen) to log back in afterward.
-- **RESET DEFAULTS vs the status screen's RESET** → RESET DEFAULTS is a row
-  the Mod Manager itself adds to every mod's options screen — it wipes ALL of
-  this mod's options (name, passphrase, the enabled toggle) back to
-  blank/default in one go, with **no confirmation**, and there's no way to
-  remove or disable that row. It used to also trigger our own reset as an
-  unwanted side effect, back when RESET was a fourth option row here (the
-  Manager's RESET DEFAULTS loops over every option a mod defines) — that's
-  why RESET now lives on the status screen (SELECT) instead of in the options
-  list, where the two can no longer collide. If you just want name/passphrase
-  wiped, RESET DEFAULTS does that (bluntly); if you want to force a fresh
-  login while keeping your name/passphrase, use SELECT on the status screen.
+- **Can't type numbers in a field / it caps at 7 characters** → the naming
+  grid has no digits by default; reinstall the latest `dist/silphnet.zip`,
+  which adds a digits row for MY NAME and PASSWORD specifically.
+- **Force a clean re-login** → open the SilphNet status screen and press
+  **SELECT**, then **A** to confirm. This clears the cached login token on
+  this device only — your account and password are untouched, so logging in
+  again with the same name+password picks up right where you left off.
+- **Friend not showing on the map** → markers only appear when your current
+  map matches their *last-known* map from their most recent ping — if
+  they've since moved on (or haven't played recently), you'll only see them
+  in the friends list, not on the ground.
 
 ## What's verified vs. what to check on-device
 
-Verified here (server tests + a stubbed-engine run of the client's logic):
+Verified via a lupa-based Lua test harness (stubbing `love`/`mod` and
+exercising the real `main.lua`): login/register/cached-token flows, presence
+firing on the correct schedule, friend marker spawn/despawn/relocate
+lifecycle (including that a moved or departed friend causes exactly one
+despawn and, if still on your map, one respawn — never a per-tick
+animation), and friendly map-name rendering.
 
-- The relay + accounts: register, duplicate-name, right/wrong passphrase
-  (challenge-response), token re-login, bad token, per-map position relay, and
-  disconnect cleanup.
-- The client: the login flow (`HI`/`LOGIN`/`AUTH`/`TOK`/`REG`) computing SHA-256
-  proofs that match the server exactly, plus the spawn / walk / despawn /
-  map-change logic.
+Marked `<< VERIFY >>` in `main.lua` (engine specifics not run against the
+real game):
 
-Marked `<< VERIFY >>` in `main.lua` (engine specifics I couldn't run without
-the game) — the likely first tweaks after your first on-device run:
-
-- the remote-trainer `sprite` id (`SPRITE_RED`) and the exact `spawnNpc`
-  object fields;
-- that `input.step` (the engine's per-tick hook for "tool" mods, see
-  `src/core/Game.lua`) keeps firing every fixed-step tick in your build — it's
-  real and present in engine source but isn't in the curated wiki hook
-  reference, so it's worth re-checking after an engine update;
-- **`advanceRemote`'s direct field writes** (`npc.cellX`/`cellY`/`px`/`py`/`facing`)
-  — see "Remote trainer movement is experimental" below. These field names
-  are inferred from `src/world/Player.lua`'s own convention; the on-device
-  test confirmed they exist and matter for this engine build, but that
-  could still change on an engine update.
+- the marker `sprite` id (`SPRITE_RED`) and exact `spawnNpc` object fields;
+- `input.step` continuing to fire every fixed-step tick on your engine build
+  — it's real and present in engine source but isn't in the curated wiki
+  hook reference;
+- how (or whether) the engine exposes which ROM version (Red/Blue/Yellow)
+  is running — `gameVersion` defaults to `"UNKNOWN"` until this is wired up.
 
 If something misbehaves, the `[silphnet]` manager errors will point right at it.
 
-## Remote trainer movement is experimental right now
-
-On-device testing tracked a persistent walk judder down further than any
-other fix here got: it correlated exactly with `handle:scriptMove` being
-actively called on a remote trainer, and stopped the instant that peer went
-idle — strong evidence `scriptMove` itself carries a real per-call cost
-inside the engine. The function it calls into is real but sits in a source
-file this session's tooling couldn't fully fetch, so the *exact* cause inside
-it was never pinned down — only the correlation with calling it at all.
-
-**Confirmed on-device:** bypassing `scriptMove` entirely and writing the
-NPC's position fields directly eliminated the judder. `main.lua` now hand-rolls
-the walk animation itself instead of ever calling `scriptMove` again —
-`advanceRemote` tweens `npc.px`/`py` toward the target tile over 16 ticks
-(`MOVE_ANIM_TICKS`, matching `Player.lua`'s own `STEP_FRAMES`), the same way
-the player's own movement code interpolates in `Player:update()`, only
-flipping `npc.cellX`/`cellY` to the destination once the tween completes.
-
-This is still **unsupported**: it reaches past the documented `Handle` API
-(`scriptMove`/`marchInPlace`/`face`/`position`) into the raw NPC table —
-exactly what `Reference-Mod-Object.md` calls out as unsupported engine
-internals. Every write stays behind a `pcall`; a failure invalidates the
-handle and falls back to the existing stuck-counter respawn, not a crash —
-worst case a trainer stops animating and gets briefly respawned. If an
-engine update ever changes these field names, that respawn-loop behavior
-(rather than a crash) is what you'd see, and it'd be a signal to come back
-to this section.
-
-## Remote trainers are non-solid to you (both directions)
-
-Remote trainers are rendered with `mod.world:spawnNpc`, which by default
-joins the engine's normal NPC collision list (`OverworldState.entities`, see
-`src/world/OverworldController.lua`) — every same-map NPC is solid to the
-*player's own* movement there, with no field on the NPC object itself to opt
-out. Rather than abandon `spawnNpc` for a hand-drawn sprite overlay (losing
-the walk-cycle animation it gives for free), this wraps the engine's
-documented `movement.collision` hook (`src/world/Collision.lua`,
-"World" section of the hook reference): whenever your own move gets blocked
-specifically because a remote trainer is standing on the target tile, the
-hook overrides that one verdict to "allowed." Walls, water and map edges are
-untouched — only a block whose reason is "an entity is there" gets
-reconsidered, and only when that entity is one of ours. Verified with a
-stubbed engine run (four cases: blocked-by-remote-trainer → allowed,
-blocked-by-something-elsewhere → still blocked, blocked-by-wall → still
-blocked even at the same coordinates, already-allowed → unaffected).
-
 ## Roadmap
 
-1. ✅ Shared overworld
-2. ✅ Accounts — name + passphrase, SHA-256 challenge-response, device tokens (Phase 1)
-3. ✅ Status screen (name / status / server / reconnect) from the START menu
-4. In-game chat overlay
-5. Avatar selection
-6. Face-to-face trade / battle requests (relayed through the engine's `LinkBattle`)
-7. Website accounts on Supabase + pairing login (Phase 2); a default server baked
-   into the mod so nobody has to type a host/port at all — see "No more typing
-   a server address" below; always-on internet server
+1. ✅ Async presence — login, periodic position reporting, friends' last-known positions
+2. ✅ Static friend markers on the map + friends list with online/offline + time-ago
+3. ✅ Trainer ID + in-game "add friend" / "accept friend" screens (digit-entry, no typing)
+4. ✅ GitHub auto-update — the launcher can pull new mod releases directly (see `.github/workflows/release-silphnet.yml`)
+5. Multiple game-version tracking per account (Red/Blue/Yellow as separate "characters") wired up to the real ROM
+6. Trainer card view (party, badges, League clears, game version)
+7. Battle a friend's last-known party as an offline NPC
+8. "Friend came online" notifications, custom greetings, unlockable battle music
 
 See `ACCOUNTS.md` for the account design and `SECURITY.md` for the security model.
 
@@ -251,4 +209,6 @@ See `ACCOUNTS.md` for the account design and `SECURITY.md` for the security mode
 
 Private repo, pushed manually via GitHub Desktop. The `SilphNet_Technical_
 Specification` files are the original Gemini design study — see the project
-notes for the review of what holds up and what doesn't.
+notes for the review of what holds up and what doesn't. The original
+real-time relay design lives in `archive/tcp_relay_retired/` if any of it is
+ever useful again.

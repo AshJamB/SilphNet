@@ -1,5 +1,15 @@
 # SilphNet accounts — approach
 
+> **Superseded by v1.0.0.** Accounts now live in MySQL (`server/web/schema.sql`,
+> `accounts` table), created/authenticated via `register.php`/`login.php`
+> over plain HTTP - not the TCP challenge-response scheme described below,
+> which belonged to the now-retired real-time relay (`archive/tcp_relay_retired/`).
+> The core goal (one account across devices, name + password typed in-game)
+> is unchanged; only the transport and where accounts are stored changed.
+> Passwords are hashed with bcrypt server-side and never stored or
+> recoverable in plaintext. See the main README and `SECURITY.md` for the
+> current model.
+
 **Goals:** one account that works on mobile *and* PC, survives reinstalls and
 new phones, and can grow into a proper website login later.
 

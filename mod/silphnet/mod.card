@@ -1,20 +1,22 @@
 return {
-  summary = "See other trainers walking the same map in real time (plain-TCP, Android-friendly).",
+  summary = "Log in, get a Trainer ID, add friends in-game, and see their last-known positions - async, plain-HTTP presence, no server process required (Android-friendly).",
   author = "Ash",
-  tags = { "multiplayer", "online", "overworld", "beta" },
+  tags = { "multiplayer", "online", "overworld", "presence" },
   differences = {
     added = {
-      "Background TCP client that syncs your overworld position",
-      "Remote trainers rendered as NPCs, non-solid to you in both directions (movement.collision hook override)",
-      "EXPERIMENTAL: remote trainer movement bypasses handle:scriptMove entirely (confirmed on-device as the cause of a persistent judder) and hand-tweens the walk animation by writing npc.px/py directly, mirroring the player's own Player:update() interpolation. Reaches into undocumented engine internals - see main.lua's advanceRemote/snapRemote comments. Fails closed (respawns the trainer) if those fields don't behave as expected on an engine update.",
-      "SELECT:RESET on the status screen - shows a confirm screen (NAME + PASSPHRASE, so you can screenshot them first) before clearing the cached login token and going offline; B cancels with nothing changed (options/save data survives mod reinstalls, so this gives you a clean-slate test without touching phone storage). Deliberately a status-screen button, not a mod option - the Manager's own RESET DEFAULTS row loops over every option a mod defines and would otherwise trigger a reset-shaped option row as a side effect of pressing it",
+      "Trainer ID: a unique 5-digit id (00000-65535, same range as the mainline games) assigned once at registration and shown on the status screen - the key used to add friends in-game.",
+      "In-game Add Friend screen: a D-pad digit spinner (UP/DOWN changes a digit, LEFT/RIGHT moves the cursor, A sends the request) - no typing, no web page, just enter a friend's Trainer ID.",
+      "Incoming friend requests: polled on the same ~30s cycle as presence, shown as a REQUESTS count on the status screen, paged through and accepted on their own screen (LEFT from the status screen).",
+      "GitHub auto-update: manifest.json now sets \"github\" so the launcher's Update / Other Versions can pull new releases directly - see .github/workflows/release-silphnet.yml (packages only mod/silphnet/, never the server source or docs, as a GitHub Release .zip on every push to main that touches the mod).",
     },
-    changed = {},
+    changed = {
+      "Nothing else changed from v1.0.0's async presence model - see that version's notes for the account/presence/marker system.",
+    },
     known = {
-      "Milestone 1 (walking skeleton): movement only - no battles, trades or chat yet",
-      "Server address is baked in at build time (see main.lua SERVER_HOST/SERVER_PORT) - no in-game HOST/PORT fields",
-      "Requires a running SilphNet server (see server/silphnet_server.py)",
-      "Remote avatar sprite is fixed to SPRITE_RED for now",
+      "Marker sprite is fixed to SPRITE_RED for now",
+      "Multiple game-version tracking (Red/Blue/Yellow as separate characters under one account) is designed into the schema (presence keyed on account_id + game_version) but gameVersion in main.lua isn't wired up to the real ROM yet - defaults to UNKNOWN",
+      "No battles, trades or chat - presence and friends only",
+      "GitHub auto-update requires the repo to be reachable by the launcher (e.g. public, or however Gen1Recomp's manager handles private-repo auth) - not verified on-device yet",
     },
   },
   credits = {

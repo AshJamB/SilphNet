@@ -1,0 +1,43 @@
+<?php
+// SilphNet async presence - shared DB connection TEMPLATE.
+// -----------------------------------------------------------------------
+// Copy this file to db.php (same folder) and fill in DB_USER / DB_PASS
+// with the cPanel MySQL user you created (e.g. jamshark_silphnet / the
+// generated password).
+//
+// db.php itself is gitignored (see .gitignore: server/web/db.php) - only
+// this .example template is tracked in git, so a real password never ends
+// up in version control even by accident. Edit the real db.php directly
+// on the server (or in your own local copy, which git will ignore) - never
+// paste real credentials into this template file.
+// -----------------------------------------------------------------------
+
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'jamshark_silphnet');
+define('DB_USER', 'jamshark_silphnet');   // << EDIT ME if you used a different username
+define('DB_PASS', 'CHANGE-ME');           // << EDIT ME - set on the server only, never in git
+
+function silphnet_db() {
+    static $pdo = null;
+    if ($pdo === null) {
+        $dsn = 'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4';
+        $pdo = new PDO($dsn, DB_USER, DB_PASS, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]);
+    }
+    return $pdo;
+}
+
+// Every endpoint returns JSON, plain text errors included - never HTML
+// error pages, so the mod's JSON-ish parsing never has to guess.
+function silphnet_json($data, $code = 200) {
+    http_response_code($code);
+    header('Content-Type: application/json');
+    echo json_encode($data);
+    exit;
+}
+
+function silphnet_error($msg, $code = 400) {
+    silphnet_json(['ok' => false, 'error' => $msg], $code);
+}

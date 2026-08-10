@@ -1,10 +1,18 @@
 # SilphNet security notes
 
-Short version: **the plain-TCP connection is not encrypted, so do not send
-reusable passwords over it in cleartext.** That's not a weird hole we
-accidentally opened — it's just the ordinary state of a plaintext network
-protocol (like old HTTP or IRC). Below is what that means and how to stay safe
-anyway.
+> **Superseded by v1.0.0.** This document describes the original real-time
+> TCP relay's security model (challenge-response over plain TCP), which has
+> been retired — see `archive/tcp_relay_retired/`. The current mod talks to
+> a PHP+MySQL API over plain HTTP instead. The password itself now DOES
+> cross the wire on login/register (same trade-off plain HTTP always has -
+> no TLS on LÖVE 11/Android, see the main README), but it's hashed with
+> bcrypt (`password_hash()`) the moment it reaches the server and only the
+> hash is ever stored - nobody, including whoever runs the database, can
+> recover the original password from it. Session tokens (not the password)
+> are what's cached on the device and sent on every later request, so a
+> sniffed token only risks that one session, not the account password
+> itself. Kept below for historical context on the plaintext-vs-hash
+> reasoning, which still broadly applies.
 
 ## What dropping HTTPS actually cost us
 

@@ -1,36 +1,40 @@
 # SilphNet (mod)
 
-See other trainers walking around the same map in real time, behind an
-account that follows you across devices/reinstalls. Uses a plain-TCP
-connection instead of HTTPS, which is why it works **on Android** too
-(LÖVE 11 has no TLS there).
+See where your friends were last, without any server of your own running.
+Log in with a name and password, and this mod periodically reports your
+position to a small PHP+MySQL API and shows friends' last-known positions
+back — as static markers on the map and in a friends list. No real-time
+movement, no persistent server process. Uses plain `http://` instead of
+HTTPS, which is why it works **on Android** too (LÖVE 11 has no TLS there).
 
 ## Try it
 
-1. Start a SilphNet server somewhere reachable (see `../../server/`):
-   `python3 silphnet_server.py`
+1. Set up the web API once — see `../../server/web/` and the main
+   `../../README.md` "Quick start" section (run `schema.sql`, upload the
+   PHP files, set `API_BASE` at the top of `main.lua` to match).
 2. Install this `silphnet` folder (or `dist/silphnet.zip`) as a mod and
    enable it in the Mod Manager.
 3. Open **SilphNet** options. Press **A** on a field to open the Game Boy
    letter-grid entry screen. This mod adds a **0–9** row to that grid for
-   its own four fields only (everywhere else in the game stays vanilla):
-   - **SERVER HOST** / **SERVER PORT** — where the server is (`.` lives in
-     the symbols row just above "ED").
-   - **MY NAME** / **PASSPHRASE** — your account. First login on a name
-     creates it; later logins prove it with a hashed challenge (the
-     passphrase is never sent in the clear) and a device token is cached so
-     you don't retype it every launch.
+   its own two fields only (everywhere else in the game stays vanilla):
+   - **MY NAME** / **PASSWORD** — your account. First login on a name
+     creates it automatically; later logins use the same name + password
+     from any device. A session token is cached so you don't retype it
+     every launch.
 
-Then load a save and walk around. Anyone else connected to the same server on
-the same map appears and moves in real time. Open **START** to see
-`SILPHNET <n>` (trainers nearby), `SILPHNET SET NAME/PASS` /
-`SILPHNET LOGIN FAIL` if login needs attention, or `SILPHNET OFF` if it hasn't
-connected.
+Then load a save and walk around. Open **START** to see `SILPHNET <name>`
+once logged in, or a status message otherwise. Select that row for the
+status screen: **A** retries login, **START** opens the friends list,
+**SELECT** resets the cached login on this device, **B** goes back.
 
 ## Notes
 
-- Needs the `network` permission (declared) because it opens a socket.
+- Needs the `network` permission (declared) because it makes HTTP requests.
 - No HTTPS/TLS is used on purpose — see `../../SECURITY.md` for what that
-  trades away and how logins stay safe anyway.
-- Movement + accounts only for now. Chat, avatars, trades and battles are
-  later milestones — see `../../README.md`.
+  means and how passwords stay safe anyway (hashed server-side, never
+  stored in plaintext).
+- No live/real-time movement by design — see the main README's "Why this
+  isn't real-time" section. The original real-time relay is retired in
+  `../../archive/tcp_relay_retired/`.
+- Friend requests currently go through `add_friend.php`/`accept_friend.php`
+  directly (no in-game screen for it yet) — see `../../README.md` roadmap.
