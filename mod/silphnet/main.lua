@@ -598,11 +598,16 @@ return function(mod)
           -- Every row below is shifted up by 8px (one line) to leave a
           -- real gap above the border, same conservative-margin approach
           -- as the horizontal character budget. << VERIFY >> on-device.
-          Font.draw("NAME", 16, 16)
-          Font.draw((myName or "----"):sub(1, 16), 16, 24)
-          Font.draw("ID   " .. (myTrainerId or "-----"), 16, 40)
-          Font.draw("STATUS", 16, 56)
-          Font.draw(statusText():sub(1, 16), 16, 64)
+          --
+          -- The name sits directly under the SILPHNET title with no "NAME"
+          -- label - saves a full row versus a separate labelled line. It
+          -- doesn't fit on the SAME line as the title ("SILPHNET - " is 11
+          -- chars, leaving only 5 for a name that can be up to 10), so
+          -- this is the two-line version of that idea instead.
+          Font.draw((myName or "----"):sub(1, 16), 16, 16)
+          Font.draw("ID   " .. (myTrainerId or "-----"), 16, 32)
+          Font.draw("STATUS", 16, 48)
+          Font.draw(statusText():sub(1, 16), 16, 56)
           -- Counts distinct PEOPLE, not distinct friends[] entries - an
           -- entry exists per (friend, game_version), so a friend with two
           -- active saves would otherwise be double-counted here.
@@ -612,8 +617,8 @@ return function(mod)
               seenPeople[f.account_id] = true; n = n + 1
             end
           end
-          Font.draw("FRIENDS  " .. n, 16, 80)
-          Font.draw("REQUESTS " .. #pendingRequests, 16, 88)
+          Font.draw("FRIENDS  " .. n, 16, 72)
+          Font.draw("REQUESTS " .. #pendingRequests, 16, 80)
           -- "RT"/"LT" here mean the D-PAD's right/left, NOT shoulder
           -- buttons - this device has no L/R at all (D-pad, A, B, SELECT,
           -- START only), and the actual input:wasPressed() calls above are
@@ -623,18 +628,18 @@ return function(mod)
           -- fix the overflow - relabeled below to say D-PAD explicitly so
           -- this doesn't read as a control that doesn't exist.
           if authState == "confirm_register" then
-            Font.draw("NO ACCOUNT FOUND", 16, 104)
-            Font.draw("FOR THIS NAME", 16, 112)
-            Font.draw("A:CREATE ACCOUNT", 16, 120)
+            Font.draw("NO ACCOUNT FOUND", 16, 96)
+            Font.draw("FOR THIS NAME", 16, 104)
+            Font.draw("A:CREATE ACCOUNT", 16, 112)
           elseif authState ~= "authed" then
-            Font.draw("A:RETRY LOGIN", 16, 104)
-            Font.draw("SET NAME+PASS IN", 16, 112)
-            Font.draw("MOD OPTIONS MENU", 16, 120)
+            Font.draw("A:RETRY LOGIN", 16, 96)
+            Font.draw("SET NAME+PASS IN", 16, 104)
+            Font.draw("MOD OPTIONS MENU", 16, 112)
           else
-            Font.draw("ST:FRIENDS", 16, 104)
-            Font.draw("DPAD R:ADD L:REQ", 16, 112)
+            Font.draw("ST:FRIENDS", 16, 96)
+            Font.draw("DPAD R:ADD L:REQ", 16, 104)
           end
-          Font.draw("B:BACK SL:RESET", 16, 128)
+          Font.draw("B:BACK SL:RESET", 16, 120)
         end
         return self
       end,
