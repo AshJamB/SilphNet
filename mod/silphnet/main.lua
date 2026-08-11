@@ -569,24 +569,44 @@ return function(mod)
     return math.floor(secs / 3600) .. " HR AGO"
   end
 
+  -- Deterministic civil-date -> days-since-epoch conversion (Howard
+  -- Hinnant's well-known algorithm), with NO dependency on os.time/os.date
+  -- or the process's local timezone at all. Needed because the previous
+  -- approach here (comparing os.time(os.date("!*t")) against
+  -- os.time(os.date("*t")) to derive a "local minus UTC" offset) was
+  -- fundamentally unreliable: os.time() ALWAYS interprets whatever table
+  -- it's given as LOCAL time, with no way to tell it "these fields are
+  -- already UTC" - so both sides of that subtraction went through the
+  -- same reinterpretation and could silently cancel to a wrong answer.
+  -- Confirmed on a real BST (UTC+1) system: that old code returned an
+  -- offset of exactly 0 (it should have been 3600), entirely because of
+  -- how the isdst field happens to affect mktime, not because the
+  -- calculation was actually timezone-aware - which is why friends who
+  -- HAD just pinged (confirmed fresh in the database, e.g. 17 seconds old)
+  -- still displayed as OFFLINE / "1 HR AGO" on-device: every last_seen was
+  -- silently off by a full hour once BST began.
+  local function daysFromCivil(y, m, d)
+    y = (m <= 2) and (y - 1) or y
+    local era = (y >= 0 and y or y - 399) // 400
+    local yoe = y - era * 400
+    local mp = (m + 9) % 12
+    local doy = (153 * mp + 2) // 5 + d - 1
+    local doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+  end
+
   -- last_seen from the API is a MySQL DATETIME string ("YYYY-MM-DD
-  -- HH:MM:SS"), always UTC (NOW() on the server). Converts to a unix
-  -- timestamp using os.time with explicit UTC fields so ONLINE/OFFLINE and
-  -- "N MIN AGO" are correct regardless of the player's local timezone.
+  -- HH:MM:SS"), always UTC (NOW() on the server, confirmed via
+  -- NOW()/UTC_TIMESTAMP() both matching on the real server). Converts
+  -- directly to a true UTC unix timestamp with no timezone-dependent step
+  -- anywhere in the calculation, so ONLINE/OFFLINE and "N MIN AGO" are
+  -- correct regardless of the player's local timezone or DST state.
   local function parseMysqlDatetimeUtc(s)
     if not s then return nil end
     local y, mo, d, h, mi, se = string.match(s, "(%d+)-(%d+)-(%d+) (%d+):(%d+):(%d+)")
     if not y then return nil end
-    -- os.time uses the LOCAL calendar interpretation of the given fields,
-    -- so build the UTC instant by comparing against os.date("!*t") (UTC
-    -- "now") and os.time with the same fields, correcting for the offset
-    -- between local and UTC epoch interpretations.
-    local utcNow = os.time(os.date("!*t"))
-    local localNow = os.time(os.date("*t"))
-    local offset = localNow - utcNow
-    local t = os.time({ year = tonumber(y), month = tonumber(mo), day = tonumber(d),
-                         hour = tonumber(h), min = tonumber(mi), sec = tonumber(se) })
-    return t + offset
+    local days = daysFromCivil(tonumber(y), tonumber(mo), tonumber(d))
+    return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(se)
   end
 
   local function statusLabel()
