@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   token       VARCHAR(64) NOT NULL PRIMARY KEY,       -- random session token, cached client-side (mod.save), same role the old TCP device token played
   account_id  VARCHAR(16) NOT NULL,
   created_at  DATETIME NOT NULL,
-  INDEX idx_account (account_id)
+  last_used   DATETIME NOT NULL,                       -- bumped on every successful login_token.php check; sessions unused past SESSION_MAX_AGE_DAYS (auth.php) are rejected and deleted, so this table can't grow forever
+  INDEX idx_account (account_id),
+  INDEX idx_last_used (last_used)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS presence (

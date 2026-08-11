@@ -55,7 +55,7 @@ try {
         ->execute([':id' => $accountId, ':name' => $name, ':hash' => $hash, ':tid' => $trainerId]);
 
     $token = bin2hex(random_bytes(32));
-    $pdo->prepare('INSERT INTO sessions (token, account_id, created_at) VALUES (:token, :id, NOW())')
+    $pdo->prepare('INSERT INTO sessions (token, account_id, created_at, last_used) VALUES (:token, :id, NOW(), NOW())')
         ->execute([':token' => $token, ':id' => $accountId]);
 
     silphnet_json(['ok' => true, 'account_id' => $accountId, 'token' => $token, 'trainer_id' => str_pad($trainerId, 5, '0', STR_PAD_LEFT)]);

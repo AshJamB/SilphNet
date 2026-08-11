@@ -27,7 +27,7 @@ try {
     }
 
     $token = bin2hex(random_bytes(32));
-    $pdo->prepare('INSERT INTO sessions (token, account_id, created_at) VALUES (:token, :id, NOW())')
+    $pdo->prepare('INSERT INTO sessions (token, account_id, created_at, last_used) VALUES (:token, :id, NOW(), NOW())')
         ->execute([':token' => $token, ':id' => $row['account_id']]);
 
     silphnet_json([

@@ -6,25 +6,27 @@
 // later launch so you don't have to log in every time.
 // POST: token
 // Returns: {"ok":true,"account_id":"...","name":"...","trainer_id":"04815"}
+//
+// Goes through the shared silphnet_require_token() (auth.php) rather than
+// its own separate query, so this endpoint gets the same expiry handling
+// as every other authenticated one for free: a session unused for more
+// than SILPHNET_SESSION_MAX_AGE_DAYS is rejected and deleted here rather
+// than being trusted forever, and an active one has its last_used bumped.
 
 require __DIR__ . '/db.php';
+require __DIR__ . '/auth.php';
 
-$token = trim($_POST['token'] ?? '');
-if ($token === '') silphnet_error('missing token');
+$account = silphnet_require_token();   // exits with 401 if invalid/expired
 
 try {
     $pdo = silphnet_db();
-    $stmt = $pdo->prepare(
-        'SELECT s.account_id, a.name, a.trainer_id FROM sessions s
-         JOIN accounts a ON a.account_id = s.account_id
-         WHERE s.token = :token'
-    );
-    $stmt->execute([':token' => $token]);
+    $stmt = $pdo->prepare('SELECT trainer_id FROM accounts WHERE account_id = :id');
+    $stmt->execute([':id' => $account['account_id']]);
     $row = $stmt->fetch();
-    if (!$row) silphnet_error('token not recognised', 401);
+    if (!$row) silphnet_error('account not found', 401);
 
     silphnet_json([
-        'ok' => true, 'account_id' => $row['account_id'], 'name' => $row['name'],
+        'ok' => true, 'account_id' => $account['account_id'], 'name' => $account['name'],
         'trainer_id' => str_pad($row['trainer_id'], 5, '0', STR_PAD_LEFT),
     ]);
 } catch (PDOException $e) {
