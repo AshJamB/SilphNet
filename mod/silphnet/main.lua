@@ -609,40 +609,6 @@ return function(mod)
     if h then pcall(h.face, h, facing) end
   end
 
-  -- Reconciles the friend-marker set against `friends` + the current map -
-  -- called once per friends-fetch completion and once on map.entered, NOT
-  -- per-tick. Each friend gets at most one static marker, only when their
-  -- last-known map matches the one you're standing on right now.
-  local function refreshMarkers()
-    if not inOverworld then despawnAllMarkers(); return end
-    local wanted = {}
-    for id, f in pairs(friends) do
-      if f.map_id == myMap then
-        local x, y = tonumber(f.x), tonumber(f.y)
-        if x and y then wanted[id] = { x = x, y = y, facing = f.facing or "down" } end
-      end
-    end
-    for id in pairs(markers) do
-      local w = wanted[id]
-      if not w or markers[id].mapId ~= myMap or markers[id].x ~= w.x or markers[id].y ~= w.y then
-        despawnMarker(id)
-      end
-    end
-    for id, w in pairs(wanted) do
-      if not markers[id] then spawnMarker(id, w.x, w.y, w.facing) end
-    end
-  end
-
-  -- ---- friends list / status text -----------------------------------------
-  local function timeAgoText(lastSeenUnix)
-    if not lastSeenUnix then return "UNKNOWN" end
-    local secs = os.time() - lastSeenUnix
-    if secs < 0 then secs = 0 end
-    if secs < 60 then return secs .. "S AGO" end
-    if secs < 3600 then return math.floor(secs / 60) .. " MIN AGO" end
-    return math.floor(secs / 3600) .. " HR AGO"
-  end
-
   -- Deterministic civil-date -> days-since-epoch conversion (Howard
   -- Hinnant's well-known algorithm), with NO dependency on os.time/os.date
   -- or the process's local timezone at all. Needed because the previous
@@ -669,6 +635,15 @@ return function(mod)
   -- division in this function needs floor (not Lua 5.1's default true
   -- division, which returns a float) since daysFromCivil is pure integer
   -- arithmetic throughout.
+  --
+  -- Moved above refreshMarkers (was previously defined after it) because
+  -- refreshMarkers now needs parseMysqlDatetimeUtc too (see below) - a
+  -- local function's name only exists in scope from its own declaration
+  -- onward, so calling it from a function defined earlier in the file
+  -- would have resolved to a nil global at runtime. This exact ordering
+  -- mistake has broken this file before (drainHttpResults, forward-
+  -- declared in a shared local line for that reason) - moving the
+  -- definition up avoids needing yet another forward-declare pair.
   local function daysFromCivil(y, m, d)
     y = (m <= 2) and (y - 1) or y
     local era = math.floor((y >= 0 and y or y - 399) / 400)
@@ -691,6 +666,53 @@ return function(mod)
     if not y then return nil end
     local days = daysFromCivil(tonumber(y), tonumber(mo), tonumber(d))
     return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(se)
+  end
+
+  -- Reconciles the friend-marker set against `friends` + the current map -
+  -- called once per friends-fetch completion and once on map.entered, NOT
+  -- per-tick. Each friend gets at most one static marker, only when their
+  -- last-known map matches the one you're standing on right now AND their
+  -- last ping is recent enough to count as ONLINE (same OFFLINE_AFTER
+  -- threshold the friends list already uses for the ONLINE/OFFLINE label -
+  -- see isOnline in SilphNetFriends' draw()). Without this check a marker
+  -- for a now-offline friend would just sit there forever on whatever map
+  -- they were last seen on, since map_id never changes again once they've
+  -- logged off - caught on-device: ARCHADA still shown OFFLINE "8 MIN AGO"
+  -- on Route 8, yet his marker was still standing there.
+  local function refreshMarkers()
+    if not inOverworld then despawnAllMarkers(); return end
+    local wanted = {}
+    for id, f in pairs(friends) do
+      -- f.last_seen is a raw MySQL datetime string (e.g. "2026-08-11
+      -- 12:34:56"), not a unix timestamp - must go through
+      -- parseMysqlDatetimeUtc first, exactly like SilphNetFriends' isOnline
+      -- check does, or this comparison is comparing a number to a string.
+      local lastSeenUnix = parseMysqlDatetimeUtc(f.last_seen)
+      local online = lastSeenUnix and (os.time() - lastSeenUnix) <= OFFLINE_AFTER
+      if online and f.map_id == myMap then
+        local x, y = tonumber(f.x), tonumber(f.y)
+        if x and y then wanted[id] = { x = x, y = y, facing = f.facing or "down" } end
+      end
+    end
+    for id in pairs(markers) do
+      local w = wanted[id]
+      if not w or markers[id].mapId ~= myMap or markers[id].x ~= w.x or markers[id].y ~= w.y then
+        despawnMarker(id)
+      end
+    end
+    for id, w in pairs(wanted) do
+      if not markers[id] then spawnMarker(id, w.x, w.y, w.facing) end
+    end
+  end
+
+  -- ---- friends list / status text -----------------------------------------
+  local function timeAgoText(lastSeenUnix)
+    if not lastSeenUnix then return "UNKNOWN" end
+    local secs = os.time() - lastSeenUnix
+    if secs < 0 then secs = 0 end
+    if secs < 60 then return secs .. "S AGO" end
+    if secs < 3600 then return math.floor(secs / 60) .. " MIN AGO" end
+    return math.floor(secs / 3600) .. " HR AGO"
   end
 
   local function statusLabel()

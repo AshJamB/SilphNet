@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.3.2 - async presence and friends, added in-game.** Log in with
+**Status: v1.3.3 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -202,10 +202,11 @@ data cap.
   this device only - the account and password are untouched, so logging in
   again with the same name and password picks up right where things left
   off.
-- **Friend not showing on the map** -> markers only appear when the current
-  map matches their *last-known* map from their most recent ping - if
-  they've since moved on (or haven't played recently), they'll only show
-  in the friends list, not on the ground.
+- **Friend not showing on the map** -> markers only appear when the
+  current map matches their *last-known* map from their most recent ping
+  AND they're currently ONLINE (pinged within the last 5 minutes) - if
+  they've since moved on, gone offline, or haven't played recently,
+  they'll only show in the friends list, not on the ground.
 
 ## What's verified vs. what to check on-device
 
@@ -214,7 +215,24 @@ exercising the real `main.lua`): login/register/cached-token flows,
 presence firing on the correct schedule, friend marker spawn, despawn and
 relocate lifecycle (including that a moved or departed friend causes
 exactly one despawn and, if still on the current map, one respawn - never
-a per-tick animation), and friendly map-name rendering.
+a per-tick animation), friendly map-name rendering, and that an OFFLINE
+friend's marker is excluded from the spawn set even when their last-known
+map still matches yours.
+
+Caught on-device: a friend's marker used to keep standing on their
+last-known tile forever after they went offline - `refreshMarkers` only
+checked "is this friend's last-known map the one I'm on", with no check
+against the same 5-minute ONLINE/OFFLINE threshold the friends list
+already uses, so nothing ever told the marker to disappear once someone
+logged off (their `map_id` doesn't change again once they're offline).
+Fixed by gating marker eligibility on that same threshold. Fixing this
+also surfaced (and fixed) the exact forward-declaration ordering bug this
+file has hit a few times before: the fix needed `parseMysqlDatetimeUtc`
+inside `refreshMarkers`, but that function was defined further down the
+file, after `refreshMarkers` - a local function's name only exists from
+its own declaration onward, so this would have resolved to a nil global
+at runtime. Moved the date-parsing helpers above `refreshMarkers` instead
+of adding another forward-declare pair.
 
 Marked `<< VERIFY >>` in `main.lua` (engine specifics not run against the
 real game):
