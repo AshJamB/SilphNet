@@ -590,11 +590,19 @@ return function(mod)
           -- against being wrong about glyph width again. << VERIFY >> on a
           -- real device - if this still clips, the true per-character
           -- width is bigger than 8px and this margin needs to grow further.
-          Font.draw("NAME", 16, 24)
-          Font.draw((myName or "----"):sub(1, 16), 16, 32)
-          Font.draw("ID   " .. (myTrainerId or "-----"), 16, 48)
-          Font.draw("STATUS", 16, 64)
-          Font.draw(statusText():sub(1, 16), 16, 72)
+          -- Vertical layout hit the same margin problem as the horizontal
+          -- one: the box is 18 tiles / 144px tall, and the last line was
+          -- drawn at y=136 - its own 8px glyph height lands its bottom
+          -- edge EXACTLY on the box's bottom border with zero margin,
+          -- which is what clipped "B:BACK SL:RESET" on real hardware.
+          -- Every row below is shifted up by 8px (one line) to leave a
+          -- real gap above the border, same conservative-margin approach
+          -- as the horizontal character budget. << VERIFY >> on-device.
+          Font.draw("NAME", 16, 16)
+          Font.draw((myName or "----"):sub(1, 16), 16, 24)
+          Font.draw("ID   " .. (myTrainerId or "-----"), 16, 40)
+          Font.draw("STATUS", 16, 56)
+          Font.draw(statusText():sub(1, 16), 16, 64)
           -- Counts distinct PEOPLE, not distinct friends[] entries - an
           -- entry exists per (friend, game_version), so a friend with two
           -- active saves would otherwise be double-counted here.
@@ -604,8 +612,8 @@ return function(mod)
               seenPeople[f.account_id] = true; n = n + 1
             end
           end
-          Font.draw("FRIENDS  " .. n, 16, 88)
-          Font.draw("REQUESTS " .. #pendingRequests, 16, 96)
+          Font.draw("FRIENDS  " .. n, 16, 80)
+          Font.draw("REQUESTS " .. #pendingRequests, 16, 88)
           -- "RT"/"LT" here mean the D-PAD's right/left, NOT shoulder
           -- buttons - this device has no L/R at all (D-pad, A, B, SELECT,
           -- START only), and the actual input:wasPressed() calls above are
@@ -615,18 +623,18 @@ return function(mod)
           -- fix the overflow - relabeled below to say D-PAD explicitly so
           -- this doesn't read as a control that doesn't exist.
           if authState == "confirm_register" then
-            Font.draw("NO ACCOUNT FOUND", 16, 112)
-            Font.draw("FOR THIS NAME", 16, 120)
-            Font.draw("A:CREATE ACCOUNT", 16, 128)
+            Font.draw("NO ACCOUNT FOUND", 16, 104)
+            Font.draw("FOR THIS NAME", 16, 112)
+            Font.draw("A:CREATE ACCOUNT", 16, 120)
           elseif authState ~= "authed" then
-            Font.draw("A:RETRY LOGIN", 16, 112)
-            Font.draw("SET NAME+PASS IN", 16, 120)
-            Font.draw("MOD OPTIONS MENU", 16, 128)
+            Font.draw("A:RETRY LOGIN", 16, 104)
+            Font.draw("SET NAME+PASS IN", 16, 112)
+            Font.draw("MOD OPTIONS MENU", 16, 120)
           else
-            Font.draw("ST:FRIENDS", 16, 112)
-            Font.draw("DPAD R:ADD L:REQ", 16, 120)
+            Font.draw("ST:FRIENDS", 16, 104)
+            Font.draw("DPAD R:ADD L:REQ", 16, 112)
           end
-          Font.draw("B:BACK SL:RESET", 16, 136)
+          Font.draw("B:BACK SL:RESET", 16, 128)
         end
         return self
       end,
