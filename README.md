@@ -137,6 +137,15 @@ explored, a static, non-animated marker appears at their last-known tile -
 it never moves on its own; if they move, the marker just relocates once on
 the next poll, not tweened or animated.
 
+### Data usage
+
+Negligible - each 30-second cycle (position report, friends list, pending
+requests) is under 2KB, so roughly 200-250KB an hour of continuous play
+with a handful of friends added, similar to occasionally refreshing a
+plain text page. There's no image, audio, or streaming data involved, so
+this is safe to leave running on mobile data without worrying about a
+data cap.
+
 ## Troubleshooting
 
 - **`SILPHNET OFF` / `SILPHNET LOGIN FAIL`** -> usually a connectivity blip

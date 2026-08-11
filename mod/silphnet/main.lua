@@ -147,8 +147,11 @@ return function(mod)
   local authState = "idle"
   local authBusy  = false
 
-  local friends = {}   -- account_id -> { name, game_version, map_id, x, y, facing, last_seen (unix) }
-  local markers = {}   -- account_id -> { npcId, mapId, x, y }  (spawned silhouettes on the CURRENT map only)
+  -- Keyed by "account_id|game_version" (see parseFriendsJson), NOT bare
+  -- account_id - one friend can have multiple entries here if they have
+  -- more than one active save.
+  local friends = {}   -- "account_id|game_version" -> { account_id, name, game_version, map_id, x, y, facing, last_seen (unix) }
+  local markers = {}   -- same key -> { npcId, mapId, x, y }  (spawned silhouettes on the CURRENT map only)
   local idToIndex, nextIndex = {}, 9000
 
   local pendingRequests = {}   -- array of { name, trainer_id } - incoming requests awaiting YOUR accept
@@ -256,10 +259,20 @@ return function(mod)
     return out
   end
 
+  -- Keyed by "account_id|game_version", not just account_id - a friend can
+  -- have more than one active save (Red/Blue/Yellow), each pinging its own
+  -- presence row (see ping.php/schema.sql's UNIQUE KEY (account_id,
+  -- game_version)). Keying by account_id alone would let a later row for
+  -- the same friend silently overwrite an earlier one here, hiding whichever
+  -- version wasn't played most recently - this key keeps every version's
+  -- last-known position visible instead of dropping all but the latest.
   local function parseFriendsJson(body)
     local out = {}
     for _, rec in ipairs(parseObjects(body)) do
-      if rec.account_id then out[rec.account_id] = rec end
+      if rec.account_id then
+        local key = rec.account_id .. "|" .. tostring(rec.game_version or "UNKNOWN")
+        out[key] = rec
+      end
     end
     return out
   end
@@ -539,15 +552,31 @@ return function(mod)
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
           Font.draw("SILPHNET", 16, 8)
-          Font.draw("NAME    " .. (myName or "----"), 16, 24)
-          Font.draw("ID      " .. (myTrainerId or "-----"), 16, 40)
-          Font.draw("STATUS  " .. statusText(), 16, 56)
-          local n = 0; for _ in pairs(friends) do n = n + 1 end
-          Font.draw("FRIENDS " .. n, 16, 72)
-          Font.draw("REQUESTS " .. #pendingRequests, 16, 88)
-          Font.draw("A:LOG IN  START:FRIENDS", 16, 104)
-          Font.draw("RIGHT:ADD LEFT:REQUESTS", 16, 112)
-          Font.draw("B:BACK  SELECT:RESET", 16, 120)
+          -- Box is 20 characters wide - every line here must fit within
+          -- that, including the value (e.g. myName, statusText()), or it
+          -- gets clipped at the box edge instead of wrapping. NAME and
+          -- STATUS values get their own line below the label for this
+          -- reason, since myName can be up to 10 chars and statusText()
+          -- can return "LOGGED IN AS <name>" (well over 20 on its own).
+          Font.draw("NAME", 16, 24)
+          Font.draw((myName or "----"):sub(1, 20), 16, 32)
+          Font.draw("ID   " .. (myTrainerId or "-----"), 16, 48)
+          Font.draw("STATUS", 16, 64)
+          Font.draw(statusText():sub(1, 20), 16, 72)
+          -- Counts distinct PEOPLE, not distinct friends[] entries - an
+          -- entry exists per (friend, game_version), so a friend with two
+          -- active saves would otherwise be double-counted here.
+          local seenPeople, n = {}, 0
+          for _, f in pairs(friends) do
+            if f.account_id and not seenPeople[f.account_id] then
+              seenPeople[f.account_id] = true; n = n + 1
+            end
+          end
+          Font.draw("FRIENDS  " .. n, 16, 88)
+          Font.draw("REQUESTS " .. #pendingRequests, 16, 96)
+          Font.draw("A:LOGIN ST:FRIENDS", 16, 112)
+          Font.draw("RT:ADD  LT:REQUEST", 16, 120)
+          Font.draw("B:BACK  SL:RESET", 16, 128)
         end
         return self
       end,
@@ -622,7 +651,15 @@ return function(mod)
               Font.draw(friendlyMapName(f.map_id), 16, 64)
               Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 80)
               Font.draw(ago, 16, 96)
-              Font.draw(tostring(f.game_version or "?"), 16, 112)
+              -- No game-version line here on purpose: the engine has no way
+              -- for a mod to detect which cartridge (Red/Blue/Yellow) is
+              -- running, and there's no in-game self-select for it yet
+              -- either, so every ping is tagged the same placeholder value
+              -- server-side. Showing that placeholder to the player just
+              -- reads as a bug ("why does it say UNKNOWN?") rather than a
+              -- real feature - better to say nothing until there's a real
+              -- value. Revisit once a version picker exists (see main.lua
+              -- git history / project notes for that discussion).
             else
               Font.draw("NEVER SEEN YET", 16, 64)
             end
