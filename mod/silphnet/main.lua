@@ -162,6 +162,7 @@ return function(mod)
 
   local pendingRequests = {}   -- array of { name, trainer_id } - incoming requests awaiting YOUR accept
   local addFriendStatus = ""   -- last add-friend result, shown briefly on the Add Friend screen
+  local pendingRemoveFriend = nil   -- { account_id, name } set by SilphNetFriends just before pushing the confirm screen
 
   local function sanitizeName(s)
     if not s or s == "" then return nil end
@@ -420,6 +421,17 @@ return function(mod)
       end
       fireFriendsFetch()
       firePendingFetch()
+    elseif tag == "remove_friend" then
+      if status == "OK" and jsonIsOk(body) then
+        mod.log:info("SilphNet: friend removed")
+      else
+        mod.log:warn("SilphNet: remove failed: %s", tostring(body))
+      end
+      -- Re-fetch regardless of success/failure, same as accept_friend -
+      -- if it actually succeeded server-side but the response got lost,
+      -- this still leaves the client showing the true current state.
+      fireFriendsFetch()
+      firePendingFetch()
     end
   end
 
@@ -454,6 +466,14 @@ return function(mod)
   local function fireAddFriend(trainerId)
     addFriendStatus = "SENDING..."
     httpPost("add_friend", "/add_friend.php", { token = mod.save:get("token") or "", trainer_id = trainerId })
+  end
+
+  -- accountId here is the OTHER person's account_id (see friends.php's
+  -- "account_id" field on each entry) - remove_friend.php deletes both
+  -- directions of an accepted friendship in one transaction, same
+  -- reasoning as accept_friend.php inserting both directions on accept.
+  local function fireRemoveFriend(accountId)
+    httpPost("remove_friend", "/remove_friend.php", { token = mod.save:get("token") or "", account_id = accountId })
   end
 
   -- ---- friend silhouettes (static, one placement per poll, never tweened) -
@@ -783,6 +803,19 @@ return function(mod)
           if input:wasPressed("left") then
             self.page = (#ids == 0) and 1 or ((self.page - 2) % #ids) + 1
           end
+          -- SELECT opens a confirm screen for the friend currently on
+          -- screen, same "don't delete on one button press" pattern as
+          -- SilphNetResetConfirm. pendingRemoveFriend is a module-level
+          -- local (declared near the other pending* state) so the confirm
+          -- screen, opened fresh via mod.ui.push, knows who it's about
+          -- without needing extra plumbing through the push call itself.
+          if input:wasPressed("select") and #ids > 0 then
+            local f = friends[ids[self.page]]
+            if f and f.account_id then
+              pendingRemoveFriend = { account_id = f.account_id, name = f.name or "?" }
+              mod.ui.push(g, "SilphNetRemoveFriendConfirm")
+            end
+          end
           if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
@@ -820,7 +853,42 @@ return function(mod)
               Font.draw("NEVER SEEN YET", 16, 64)
             end
           end
-          Font.draw("B:BACK", 16, 128)
+          Font.draw("B:BACK SL:REMOVE", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Confirm-before-delete for removing a friend, opened from SilphNetFriends
+  -- via SELECT - same reasoning as SilphNetResetConfirm: a destructive
+  -- action gets its own screen rather than firing on a single button press
+  -- on the list itself. pendingRemoveFriend is set by SilphNetFriends right
+  -- before this screen is pushed (see above).
+  pcall(function()
+    mod.content.screens:register("SilphNetRemoveFriendConfirm", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          local input = g.input
+          if input:wasPressed("a") then
+            if pendingRemoveFriend then fireRemoveFriend(pendingRemoveFriend.account_id) end
+            pendingRemoveFriend = nil
+            g.stack:pop()
+          end
+          if input:wasPressed("b") then pendingRemoveFriend = nil; g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("REMOVE FRIEND?", 16, 8)
+          Font.draw("NAME", 16, 32)
+          Font.draw(((pendingRemoveFriend and pendingRemoveFriend.name) or "?"):sub(1, 16), 16, 40)
+          Font.draw("THEY WON'T SEE", 16, 56)
+          Font.draw("YOUR POSITION", 16, 64)
+          Font.draw("ANYMORE", 16, 72)
+          Font.draw("A:CONFIRM REMOVE", 16, 120)
+          Font.draw("B:CANCEL", 16, 128)
         end
         return self
       end,
