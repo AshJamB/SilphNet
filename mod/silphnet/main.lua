@@ -157,8 +157,59 @@ return function(mod)
   -- account_id - one friend can have multiple entries here if they have
   -- more than one active save.
   local friends = {}   -- "account_id|game_version" -> { account_id, name, game_version, map_id, x, y, facing, last_seen (unix) }
-  local markers = {}   -- same key -> { npcId, mapId, x, y }  (spawned silhouettes on the CURRENT map only)
-  local idToIndex, nextIndex = {}, 9000
+  local markers = {}   -- same key -> { npcId, mapId, x, y, slot }  (spawned silhouettes on the CURRENT map only)
+  local idToIndex, nextIndex = {}, 9000   -- object `index` (save-key namespace), separate from talk slots below
+
+  -- ---- friend-marker talk slots --------------------------------------------
+  -- map_scripts is per-real-mapId, compose semantics, keyed per TEXT constant
+  -- (Reference-Registries, Tutorial-06-NPC-And-Dialogue) - there's no way to
+  -- register "any map" once, so we register a FIXED set of SILPHNET_MARKER_SLOT_N
+  -- talk entries on every map as the player enters it (guarded so a revisit
+  -- doesn't try to :register a duplicate id, which errors). Each marker NPC
+  -- claims one slot out of MARKER_SLOTS while it's alive; the slot's talk
+  -- script always pushes the SAME generic SilphNetMarkerTalk screen with that
+  -- slot number, and the screen looks up whichever friend currently OWNS that
+  -- slot at the moment you press A - so the name shown is always live, never
+  -- frozen at registration time. This is the documented-API-safe fallback:
+  -- no per-friend TEXT ids, no reliance on ctx exposing which NPC was pressed
+  -- (never confirmed in the wiki - see README << VERIFY >> note).
+  local MARKER_SLOTS = 8   -- plenty for a friends list this size; raise if needed
+  local slotToKey = {}     -- slot (1..MARKER_SLOTS) -> friends/markers key, or nil if free
+  local keyToSlot = {}     -- friends/markers key -> slot
+  local scriptedMaps = {}  -- mapId -> true once its slot talk scripts are registered
+
+  local function allocSlot(key)
+    if keyToSlot[key] then return keyToSlot[key] end
+    for slot = 1, MARKER_SLOTS do
+      if not slotToKey[slot] then
+        slotToKey[slot] = key
+        keyToSlot[key] = slot
+        return slot
+      end
+    end
+    return nil   -- all slots taken - more than MARKER_SLOTS friends on-screen at once
+  end
+
+  local function freeSlot(key)
+    local slot = keyToSlot[key]
+    if slot then slotToKey[slot] = nil; keyToSlot[key] = nil end
+  end
+
+  -- Registers the fixed slot talk scripts on a map, once. Safe to call
+  -- repeatedly (guarded by scriptedMaps) since map_scripts:register errors
+  -- on a duplicate id.
+  local function ensureMapScripted(mapId)
+    if not mapId or scriptedMaps[mapId] then return end
+    scriptedMaps[mapId] = true
+    local talk = {}
+    for slot = 1, MARKER_SLOTS do
+      talk["TEXT_SILPHNET_MARKER_SLOT_" .. slot] = {
+        { "push_screen", "SilphNetMarkerTalk", { slot = slot } },
+      }
+    end
+    local ok, err = pcall(function() mod.content.map_scripts:register(mapId, { talk = talk }) end)
+    if not ok then mod.log:warn("SilphNet: map_scripts register failed for %s: %s", tostring(mapId), tostring(err)) end
+  end
 
   local pendingRequests = {}   -- array of { name, trainer_id } - incoming requests awaiting YOUR accept
   local addFriendStatus = ""   -- last add-friend result, shown briefly on the Add Friend screen
@@ -520,16 +571,21 @@ return function(mod)
   local function despawnMarker(id)
     local m = markers[id]
     if m and m.npcId ~= nil then pcall(mod.world.removeNpc, mod.world, m.npcId) end
+    freeSlot(id)
     markers[id] = nil
   end
   local function despawnAllMarkers() for id in pairs(markers) do despawnMarker(id) end end
 
   local function spawnMarker(id, x, y, facing)   -- << VERIFY >> objDef shape
+    ensureMapScripted(myMap)
+    local slot = allocSlot(id)
+    if not slot then mod.log:warn("SilphNet: no free marker slot for %s (raise MARKER_SLOTS)", tostring(id)); return end
     local objDef = { index = allocIndex(id), x = x, y = y, sprite = MY_SPRITE,
-                      movement = "STAY", range = "NONE", name = "SILPHNET_FRIEND_" .. id }
+                      movement = "STAY", range = "NONE", name = "SILPHNET_FRIEND_" .. id,
+                      text = "TEXT_SILPHNET_MARKER_SLOT_" .. slot }
     local ok, npcId = pcall(mod.world.spawnNpc, mod.world, myMap, objDef)
-    if not ok then mod.log:warn("SilphNet: marker spawn failed for %s: %s", tostring(id), tostring(npcId)); return end
-    markers[id] = { npcId = npcId, mapId = myMap, x = x, y = y }
+    if not ok then mod.log:warn("SilphNet: marker spawn failed for %s: %s", tostring(id), tostring(npcId)); freeSlot(id); return end
+    markers[id] = { npcId = npcId, mapId = myMap, x = x, y = y, slot = slot }
     local h
     pcall(function() h = mod.world:npc(myMap, "SILPHNET_FRIEND_" .. id) end)
     if h then pcall(h.face, h, facing) end
@@ -909,11 +965,19 @@ return function(mod)
             -- every other line on these screens.
             Font.draw((self.page) .. "/" .. #ids, 16, 32)
             Font.draw((f.name or "?"):sub(1, 16), 16, 40)
-            Font.draw(isOnline and "ONLINE" or "OFFLINE", 16, 48)
+            -- friends.php already returns trainer_id (zero-padded, same as
+            -- everywhere else it's shown) - it just wasn't drawn here
+            -- before. There WAS spare vertical space on this screen (a
+            -- 32px/4-row gap between the last data line and the bottom
+            -- hint row, unlike every other screen in this file which is
+            -- genuinely at its margin limit), confirmed by re-checking the
+            -- real y-positions already in use before adding this.
+            Font.draw("ID   " .. (f.trainer_id or "-----"), 16, 48)
+            Font.draw(isOnline and "ONLINE" or "OFFLINE", 16, 56)
             if f.map_id then
-              Font.draw(friendlyMapName(f.map_id):sub(1, 16), 16, 64)
-              Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 80)
-              Font.draw(ago, 16, 96)
+              Font.draw(friendlyMapName(f.map_id):sub(1, 16), 16, 72)
+              Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 88)
+              Font.draw(ago, 16, 104)
               -- No game-version line here on purpose: the engine has no way
               -- for a mod to detect which cartridge (Red/Blue/Yellow) is
               -- running, and there's no in-game self-select for it yet
@@ -924,9 +988,15 @@ return function(mod)
               -- value. Revisit once a version picker exists (see main.lua
               -- git history / project notes for that discussion).
             else
-              Font.draw("NEVER SEEN YET", 16, 64)
+              Font.draw("NEVER SEEN YET", 16, 72)
             end
           end
+          -- Real navigation hint, not left off for lack of room this time -
+          -- this screen happens to have spare vertical space (see above),
+          -- unlike most others in this file which are genuinely at their
+          -- margin limit. LEFT/RIGHT hint only shown with >1 friend, since
+          -- paging does nothing with 0 or 1.
+          if #ids > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, 120) end
           Font.draw("B:BACK SL:REMOVE", 16, 128)
         end
         return self
@@ -1226,6 +1296,7 @@ return function(mod)
     despawnAllMarkers()
     inOverworld = true
     myMap = ev.mapId
+    ensureMapScripted(myMap)
     local cur = mod.world:current()
     if cur then myX, myY, myFacing = cur.x, cur.y, cur.facing end
     refreshMarkers()
@@ -1299,6 +1370,39 @@ return function(mod)
           Font.draw("PLAYING!", 16, 88)
           Font.draw("V" .. tostring(mod.version or "?"), 16, 112)
           Font.draw("B:BACK", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Friend-marker "who is this" screen (point 3 from testing feedback).
+  -- Pushed by the per-slot talk scripts registered in ensureMapScripted -
+  -- see the long comment above MARKER_SLOTS for why this is slot-based
+  -- rather than per-friend TEXT ids. The name is looked up HERE, at push
+  -- time, from slotToKey/friends - never frozen at registration - so it's
+  -- always the current occupant of that slot, even if markers were
+  -- despawned/respawned (friend moved, or a different friend now sits on
+  -- this exact slot) since the talk script itself was registered.
+  -- << VERIFY >> the push_screen script command's second arg reaching new()
+  -- as-is; mod.ui.push(game, screenId, ...) is documented as variadic
+  -- (Reference-Mod-Object), so this reads args defensively either way.
+  pcall(function()
+    mod.content.screens:register("SilphNetMarkerTalk", {
+      new = function(g, args)
+        local Font = mod.ui.Font
+        local slot = args and args.slot
+        local key = slot and slotToKey[slot]
+        local f = key and friends[key]
+        local name = (f and f.name) or "?"
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          if g.input:wasPressed("b") or g.input:wasPressed("a") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 4)
+          Font.draw(name:sub(1, 16), 16, 8)
+          Font.draw("A/B:CLOSE", 16, 24)
         end
         return self
       end,

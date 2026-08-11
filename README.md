@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.2.7 - async presence and friends, added in-game.** Log in with
+**Status: v1.3.0 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -167,6 +167,14 @@ one being explored, a static, non-animated marker appears at their
 last-known tile - it never moves on its own; if they move, the marker just
 relocates once on the next poll, not tweened or animated.
 
+Press **A** while facing a friend's marker to see who it is - a small box
+pops up with their name, then closes on A or B. This is a live lookup done
+the instant you press A, not something baked in when the marker appeared,
+so it's always correct even if the marker's owner changed in the
+meantime. Up to 8 friend markers can be identified this way at once
+(more than enough for any normal friends list); if that's ever not
+enough, `MARKER_SLOTS` in `main.lua` can be raised.
+
 ### Data usage
 
 Negligible - each 30-second cycle (position report, friends list, pending
@@ -214,6 +222,13 @@ real game):
 - exact GB-screen text glyph width - `main.lua` assumes 8px/character and
   budgets every screen conservatively under that, but this hasn't been
   independently confirmed against the engine's font asset.
+- the friend-marker "press A to see who it is" feature: confirmed against
+  the documented `map_scripts`/`talk`/`push_screen` API surface and
+  compiled cleanly under real LuaJIT, but not yet pressed on a real
+  device. Uses a fixed pool of 8 talk-script "slots" registered per map
+  (see the `MARKER_SLOTS` comment in `main.lua`) rather than one script
+  per friend, since the wiki doesn't document a way for a talk script to
+  identify which specific NPC object triggered it.
 
 An earlier version drove its background presence/friends timer off
 `input.step`, a hook that's real in engine source but was never in the
