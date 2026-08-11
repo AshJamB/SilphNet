@@ -176,7 +176,6 @@ return function(mod)
   local MARKER_SLOTS = 8   -- plenty for a friends list this size; raise if needed
   local slotToKey = {}     -- slot (1..MARKER_SLOTS) -> friends/markers key, or nil if free
   local keyToSlot = {}     -- friends/markers key -> slot
-  local scriptedMaps = {}  -- mapId -> true once its slot talk scripts are registered
 
   local function allocSlot(key)
     if keyToSlot[key] then return keyToSlot[key] end
@@ -195,21 +194,41 @@ return function(mod)
     if slot then slotToKey[slot] = nil; keyToSlot[key] = nil end
   end
 
-  -- Registers the fixed slot talk scripts on a map, once. Safe to call
-  -- repeatedly (guarded by scriptedMaps) since map_scripts:register errors
-  -- on a duplicate id.
-  local function ensureMapScripted(mapId)
-    if not mapId or scriptedMaps[mapId] then return end
-    scriptedMaps[mapId] = true
+  -- Registers the fixed slot talk scripts on EVERY known map, ONCE, right
+  -- here at entry-chunk time. This used to happen lazily from map.entered,
+  -- which was a real bug: Concepts-Lifecycle is explicit that content
+  -- registries (map_scripts included) FREEZE after the merge phase -
+  -- "register/override/patch/remove raise from then on... Register content
+  -- at entry-chunk time." Calling mod.content.map_scripts:register from a
+  -- map.entered handler (Play phase, long after the freeze) raised every
+  -- single time - silently, because it was wrapped in pcall - which is
+  -- exactly why pressing A on a marker did nothing at all on either device.
+  -- The fix: enumerate every real map via mod.content.maps:each() (vanilla
+  -- map data is already imported before any mod's entry chunk runs, so
+  -- this sees the whole game) and register all MARKER_SLOTS talk entries
+  -- on all of them up front, while registration is still legal.
+  local function registerAllMarkerTalkScripts()
     local talk = {}
     for slot = 1, MARKER_SLOTS do
       talk["TEXT_SILPHNET_MARKER_SLOT_" .. slot] = {
         { "push_screen", "SilphNetMarkerTalk", { slot = slot } },
       }
     end
-    local ok, err = pcall(function() mod.content.map_scripts:register(mapId, { talk = talk }) end)
-    if not ok then mod.log:warn("SilphNet: map_scripts register failed for %s: %s", tostring(mapId), tostring(err)) end
+    local count = 0
+    local ok, err = pcall(function()
+      for mapId in mod.content.maps:each() do
+        local rok, rerr = pcall(function() mod.content.map_scripts:register(mapId, { talk = talk }) end)
+        if rok then count = count + 1
+        else mod.log:warn("SilphNet: map_scripts register failed for %s: %s", tostring(mapId), tostring(rerr)) end
+      end
+    end)
+    if not ok then mod.log:warn("SilphNet: maps:each() failed: %s", tostring(err)) end
+    mod.log:info("SilphNet: marker talk scripts registered on %d map(s)", count)
   end
+
+  -- Must run HERE, synchronously, during entry-chunk execution - not from
+  -- any event handler - per Concepts-Lifecycle's content-registry freeze.
+  registerAllMarkerTalkScripts()
 
   local pendingRequests = {}   -- array of { name, trainer_id } - incoming requests awaiting YOUR accept
   local addFriendStatus = ""   -- last add-friend result, shown briefly on the Add Friend screen
@@ -577,7 +596,6 @@ return function(mod)
   local function despawnAllMarkers() for id in pairs(markers) do despawnMarker(id) end end
 
   local function spawnMarker(id, x, y, facing)   -- << VERIFY >> objDef shape
-    ensureMapScripted(myMap)
     local slot = allocSlot(id)
     if not slot then mod.log:warn("SilphNet: no free marker slot for %s (raise MARKER_SLOTS)", tostring(id)); return end
     local objDef = { index = allocIndex(id), x = x, y = y, sprite = MY_SPRITE,
@@ -1296,7 +1314,6 @@ return function(mod)
     despawnAllMarkers()
     inOverworld = true
     myMap = ev.mapId
-    ensureMapScripted(myMap)
     local cur = mod.world:current()
     if cur then myX, myY, myFacing = cur.x, cur.y, cur.facing end
     refreshMarkers()

@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.3.0 - async presence and friends, added in-game.** Log in with
+**Status: v1.3.1 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -222,13 +222,25 @@ real game):
 - exact GB-screen text glyph width - `main.lua` assumes 8px/character and
   budgets every screen conservatively under that, but this hasn't been
   independently confirmed against the engine's font asset.
-- the friend-marker "press A to see who it is" feature: confirmed against
-  the documented `map_scripts`/`talk`/`push_screen` API surface and
-  compiled cleanly under real LuaJIT, but not yet pressed on a real
-  device. Uses a fixed pool of 8 talk-script "slots" registered per map
-  (see the `MARKER_SLOTS` comment in `main.lua`) rather than one script
-  per friend, since the wiki doesn't document a way for a talk script to
-  identify which specific NPC object triggered it.
+- the friend-marker "press A to see who it is" feature: built on the
+  documented `map_scripts`/`talk`/`push_screen` API surface, using a
+  fixed pool of 8 talk-script "slots" registered on every map (see the
+  `MARKER_SLOTS` comment in `main.lua`) rather than one script per
+  friend, since the wiki doesn't document a way for a talk script to
+  identify which specific NPC object triggered it. The first shipped
+  version of this registered those talk scripts lazily, from
+  `map.entered` - which real two-player testing caught immediately:
+  pressing A did nothing at all, on both devices. Root cause, confirmed
+  against the wiki's own lifecycle docs: content registries (including
+  `map_scripts`) freeze after the merge phase, and
+  register/override/patch/remove all raise from then on - "register
+  content at entry-chunk time." `map.entered` fires during Play, long
+  after that freeze, so every registration attempt was raising and
+  being silently swallowed by a `pcall`. Fixed by registering all 8
+  slots on every real map up front, once, at true entry-chunk time
+  (enumerated via `mod.content.maps:each()`, which already sees the
+  whole imported game before any mod's entry chunk runs) - not yet
+  re-confirmed on a real device.
 
 An earlier version drove its background presence/friends timer off
 `input.step`, a hook that's real in engine source but was never in the
