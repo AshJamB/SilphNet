@@ -1,5 +1,7 @@
 # SilphNet
 
+![SilphNet](assets/silphnet-banner.png)
+
 A multiplayer presence mod for [Pokémon Gen 1 Recomp](https://github.com/bryanthaboi/gen1recomp).
 Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
