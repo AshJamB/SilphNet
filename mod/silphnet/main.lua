@@ -1417,9 +1417,16 @@ return function(mod)
           if g.input:wasPressed("b") or g.input:wasPressed("a") then g.stack:pop() end
         end
         function self:draw()
-          Font.drawBox(0, 0, 20, 4)
+          -- 6 rows tall (48px), not 4 - the original 4-row box left no
+          -- clearance between the "A/B:CLOSE" line and the box's own
+          -- bottom border, so the text rendered jammed against/behind the
+          -- frame line (reported on-device as "chopped off, almost
+          -- struck-through"). Every other screen in this file keeps one
+          -- full clear row above the bottom border - this now matches
+          -- that same rule.
+          Font.drawBox(0, 0, 20, 6)
           Font.draw(name:sub(1, 16), 16, 8)
-          Font.draw("A/B:CLOSE", 16, 24)
+          Font.draw("A/B:CLOSE", 16, 32)
         end
         return self
       end,

@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.3.1 - async presence and friends, added in-game.** Log in with
+**Status: v1.3.2 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -167,12 +167,13 @@ one being explored, a static, non-animated marker appears at their
 last-known tile - it never moves on its own; if they move, the marker just
 relocates once on the next poll, not tweened or animated.
 
-Press **A** while facing a friend's marker to see who it is - a small box
-pops up with their name, then closes on A or B. This is a live lookup done
-the instant you press A, not something baked in when the marker appeared,
-so it's always correct even if the marker's owner changed in the
-meantime. Up to 8 friend markers can be identified this way at once
-(more than enough for any normal friends list); if that's ever not
+Press **A** while facing a friend's marker to see who it is - a small,
+full-screen box (not a vanilla-style speech bubble) pops up with their
+name, then closes on A or B. This is a live lookup done the instant you
+press A, not something baked in when the marker appeared, so it's always
+correct even if the marker's owner changed in the meantime. Up to 8
+friend markers can be identified this way at once (more than enough for
+any normal friends list); if that's ever not
 enough, `MARKER_SLOTS` in `main.lua` can be raised.
 
 ### Data usage
@@ -240,7 +241,14 @@ real game):
   slots on every real map up front, once, at true entry-chunk time
   (enumerated via `mod.content.maps:each()`, which already sees the
   whole imported game before any mod's entry chunk runs) - not yet
-  re-confirmed on a real device.
+  re-confirmed on a real device. Once it did fire on-device, two-player
+  testing confirmed the popup itself works (right friend, right name),
+  but caught a real layout bug: the box was only drawn 4 rows tall, so
+  the "A/B:CLOSE" hint line landed with no clearance above the box's own
+  bottom border and rendered jammed against/behind that frame line.
+  Fixed by making the box 6 rows tall, matching the one-clear-row-above-
+  the-border rule every other screen in this file already follows - not
+  yet re-confirmed on-device.
 
 An earlier version drove its background presence/friends timer off
 `input.step`, a hook that's real in engine source but was never in the
