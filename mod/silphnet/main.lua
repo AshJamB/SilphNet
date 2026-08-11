@@ -164,10 +164,14 @@ return function(mod)
     return s
   end
 
+  -- No fallback to game.save.player.name (the trainer name given to Oak)
+  -- here on purpose - an earlier version silently used it whenever MY
+  -- NAME was left blank, which meant an account could get created under
+  -- a name the player never actually chose or saw, with zero indication
+  -- that had happened. A SilphNet name is always something the player
+  -- deliberately typed into MY NAME, same as the password.
   local function resolveMyName()
     return sanitizeName(opt("name", ""))
-        or (game and game.save and game.save.player and sanitizeName(game.save.player.name))
-        or nil
   end
 
   -- ---- HTTP plumbing ------------------------------------------------------
@@ -354,9 +358,14 @@ return function(mod)
         onAuthOk(jsonField(body, "account_id"), myName, jsonField(body, "token"), jsonField(body, "trainer_id"))
       elseif status == "OK" then
         -- Valid HTTP response but ok:false - most likely "wrong name or
-        -- password" for a name that doesn't exist yet. First login on a
-        -- new name auto-creates the account, same as before.
-        doRegister()
+        -- password" for a name that doesn't exist yet. Rather than
+        -- silently auto-creating an account here (the old behaviour - a
+        -- real account, password, and Trainer ID could get created
+        -- without the player ever seeing or confirming it happened),
+        -- stop and show a confirmation screen; registration only
+        -- actually fires if the player presses A on it.
+        authBusy = false
+        authState = "confirm_register"
       else
         authBusy = false
         authState = "failed"
@@ -501,14 +510,21 @@ return function(mod)
 
   local function statusLabel()
     if authState == "authed" then return "SILPHNET " .. myName end
+    if authState == "confirm_register" then return "SILPHNET NEW ACCT?" end
     if authState == "need_creds" then return "SILPHNET SET NAME/PASS" end
     if authState == "failed" then return "SILPHNET LOGIN FAIL" end
     if authState == "logging_in" then return "SILPHNET ..." end
     return "SILPHNET OFF"
   end
 
+  -- Doesn't repeat myName here even when logged in - the NAME row right
+  -- above this on the status screen already shows it, and "LOGGED IN AS "
+  -- (13 chars) plus any real name reliably overflowed the 16-char budget,
+  -- which is what made ASHJAM render as the confusing, truncated "LOGGED
+  -- IN AS ASH" on a real device (13 + "ASHJAM" cut at 16 = "...AS ASH").
   local function statusText()
-    if authState == "authed" then return "LOGGED IN AS " .. tostring(myName) end
+    if authState == "authed" then return "LOGGED IN" end
+    if authState == "confirm_register" then return "PRESS A: NEW ACCT" end
     if authState == "need_creds" then return "SET NAME/PASS" end
     if authState == "failed" then return "LOGIN FAILED" end
     if authState == "logging_in" then return "LOGGING IN.." end
@@ -540,7 +556,13 @@ return function(mod)
         local self = { game = g, isOpaque = true }
         function self:update(dt)
           local input = g.input
-          if input:wasPressed("a") then beginAuth() end
+          if input:wasPressed("a") then
+            if authState == "confirm_register" then
+              mod.ui.push(g, "SilphNetRegisterConfirm")
+            else
+              beginAuth()
+            end
+          end
           if input:wasPressed("b") then g.stack:pop() end
           if input:wasPressed("start") then mod.ui.push(g, "SilphNetFriends") end
           if input:wasPressed("right") then addFriendStatus = ""; mod.ui.push(g, "SilphNetAddFriend") end
@@ -592,7 +614,11 @@ return function(mod)
           -- confusing abbreviation left over from shortening this line to
           -- fix the overflow - relabeled below to say D-PAD explicitly so
           -- this doesn't read as a control that doesn't exist.
-          if authState ~= "authed" then
+          if authState == "confirm_register" then
+            Font.draw("NO ACCOUNT FOUND", 16, 112)
+            Font.draw("FOR THIS NAME", 16, 120)
+            Font.draw("A:CREATE ACCOUNT", 16, 128)
+          elseif authState ~= "authed" then
             Font.draw("A:RETRY LOGIN", 16, 112)
             Font.draw("SET NAME+PASS IN", 16, 120)
             Font.draw("MOD OPTIONS MENU", 16, 128)
@@ -601,6 +627,40 @@ return function(mod)
             Font.draw("DPAD R:ADD L:REQ", 16, 120)
           end
           Font.draw("B:BACK SL:RESET", 16, 136)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Shown once, only when a login attempt comes back "no such account" -
+  -- registration used to fire immediately and silently at that point (a
+  -- real account, password hash, and Trainer ID created without the
+  -- player seeing or agreeing to it). Now it only happens if the player
+  -- explicitly presses A here; B backs out without creating anything,
+  -- leaving authState as "confirm_register" so the player can go change
+  -- MY NAME first if this wasn't the name they meant to use.
+  pcall(function()
+    mod.content.screens:register("SilphNetRegisterConfirm", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          local input = g.input
+          if input:wasPressed("a") then doRegister(); g.stack:pop() end
+          if input:wasPressed("b") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("CREATE ACCOUNT?", 16, 8)
+          Font.draw("NAME", 16, 32)
+          Font.draw((myName or "----"):sub(1, 16), 16, 40)
+          Font.draw("NO SILPHNET ACCT", 16, 56)
+          Font.draw("EXISTS FOR THIS", 16, 64)
+          Font.draw("NAME. A NEW ONE", 16, 72)
+          Font.draw("WILL BE MADE.", 16, 80)
+          Font.draw("A:CREATE", 16, 120)
+          Font.draw("B:CANCEL", 16, 128)
         end
         return self
       end,
