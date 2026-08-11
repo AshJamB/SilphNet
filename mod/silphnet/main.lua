@@ -552,17 +552,27 @@ return function(mod)
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
           Font.draw("SILPHNET", 16, 8)
-          -- Box is 20 characters wide - every line here must fit within
-          -- that, including the value (e.g. myName, statusText()), or it
-          -- gets clipped at the box edge instead of wrapping. NAME and
-          -- STATUS values get their own line below the label for this
-          -- reason, since myName can be up to 10 chars and statusText()
-          -- can return "LOGGED IN AS <name>" (well over 20 on its own).
+          -- The box is drawn at 20x18 TILES (8px each) starting at pixel 0,
+          -- but every line of text here starts at x=16 (2 tiles in), not
+          -- x=0 - so the true remaining width is AT MOST 160-16=144px
+          -- (18 8px characters), not the full 20 the box itself spans. An
+          -- earlier pass budgeted lines at 20 chars and missed this inset
+          -- entirely, which is why "A:LOGIN ST:FRIENDS" (19 chars) still
+          -- got clipped on real hardware even after being "shortened."
+          --
+          -- That 18-char figure ALSO assumes each glyph is exactly 8px,
+          -- which isn't confirmed anywhere in the engine docs - so rather
+          -- than cut it exactly to the calculated limit a second time,
+          -- every line here is deliberately kept to <= 16 characters, two
+          -- shorter than the calculated boundary, as a real safety margin
+          -- against being wrong about glyph width again. << VERIFY >> on a
+          -- real device - if this still clips, the true per-character
+          -- width is bigger than 8px and this margin needs to grow further.
           Font.draw("NAME", 16, 24)
-          Font.draw((myName or "----"):sub(1, 20), 16, 32)
+          Font.draw((myName or "----"):sub(1, 16), 16, 32)
           Font.draw("ID   " .. (myTrainerId or "-----"), 16, 48)
           Font.draw("STATUS", 16, 64)
-          Font.draw(statusText():sub(1, 20), 16, 72)
+          Font.draw(statusText():sub(1, 16), 16, 72)
           -- Counts distinct PEOPLE, not distinct friends[] entries - an
           -- entry exists per (friend, game_version), so a friend with two
           -- active saves would otherwise be double-counted here.
@@ -574,9 +584,23 @@ return function(mod)
           end
           Font.draw("FRIENDS  " .. n, 16, 88)
           Font.draw("REQUESTS " .. #pendingRequests, 16, 96)
-          Font.draw("A:LOGIN ST:FRIENDS", 16, 112)
-          Font.draw("RT:ADD  LT:REQUEST", 16, 120)
-          Font.draw("B:BACK  SL:RESET", 16, 128)
+          -- "RT"/"LT" here mean the D-PAD's right/left, NOT shoulder
+          -- buttons - this device has no L/R at all (D-pad, A, B, SELECT,
+          -- START only), and the actual input:wasPressed() calls above are
+          -- already bound to "right"/"left" on the D-pad, never a shoulder
+          -- button. The old labels ("RT:ADD", "LT:REQUEST") were just a
+          -- confusing abbreviation left over from shortening this line to
+          -- fix the overflow - relabeled below to say D-PAD explicitly so
+          -- this doesn't read as a control that doesn't exist.
+          if authState ~= "authed" then
+            Font.draw("A:RETRY LOGIN", 16, 112)
+            Font.draw("SET NAME+PASS IN", 16, 120)
+            Font.draw("MOD OPTIONS MENU", 16, 128)
+          else
+            Font.draw("ST:FRIENDS", 16, 112)
+            Font.draw("DPAD R:ADD L:REQ", 16, 120)
+          end
+          Font.draw("B:BACK SL:RESET", 16, 136)
         end
         return self
       end,
@@ -596,7 +620,11 @@ return function(mod)
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
           Font.draw("RESET SILPHNET?", 16, 8)
-          Font.draw("NAME   " .. (myName or "----"), 16, 32)
+          -- Kept to <= 16 chars/line, same conservative margin as
+          -- SilphNetStatus - MY NAME can be up to 10 chars (FIELD_MAXLEN),
+          -- so "NAME   " (7 chars) + a full-length name would overflow.
+          Font.draw("NAME", 16, 32)
+          Font.draw((myName or "----"):sub(1, 16), 16, 40)
           Font.draw("CLEARS SAVED", 16, 56)
           Font.draw("LOGIN ON THIS", 16, 64)
           Font.draw("DEVICE ONLY", 16, 72)
@@ -645,10 +673,14 @@ return function(mod)
             local lastSeenUnix = parseMysqlDatetimeUtc(f.last_seen)
             local ago = timeAgoText(lastSeenUnix)
             local isOnline = lastSeenUnix and (os.time() - lastSeenUnix) <= OFFLINE_AFTER
-            Font.draw((self.page) .. "/" .. #ids .. "  " .. (f.name or "?"), 16, 32)
-            Font.draw(isOnline and "STATUS ONLINE" or "STATUS OFFLINE", 16, 48)
+            -- Page counter + name on their own lines - "99/99  " plus a
+            -- full 10-char name would overflow the same 16-char budget as
+            -- every other line on these screens.
+            Font.draw((self.page) .. "/" .. #ids, 16, 32)
+            Font.draw((f.name or "?"):sub(1, 16), 16, 40)
+            Font.draw(isOnline and "ONLINE" or "OFFLINE", 16, 48)
             if f.map_id then
-              Font.draw(friendlyMapName(f.map_id), 16, 64)
+              Font.draw(friendlyMapName(f.map_id):sub(1, 16), 16, 64)
               Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 80)
               Font.draw(ago, 16, 96)
               -- No game-version line here on purpose: the engine has no way
@@ -707,7 +739,10 @@ return function(mod)
             row = row .. tostring(self.digits[i]) .. (i == self.cursor and "^" or " ")
           end
           Font.draw(row, 16, 56)
-          if addFriendStatus ~= "" then Font.draw(addFriendStatus, 16, 80) end
+          -- addFriendStatus can be "REQUEST SENT TO <name>" or "ERROR:
+          -- <server text>" - both unbounded in length, so truncated to
+          -- the same conservative 16-char budget as every other line.
+          if addFriendStatus ~= "" then Font.draw(addFriendStatus:sub(1, 16), 16, 80) end
           Font.draw("UP/DOWN:DIGIT", 16, 104)
           Font.draw("LEFT/RIGHT:MOVE", 16, 112)
           Font.draw("A:SEND  B:BACK", 16, 128)
@@ -748,7 +783,8 @@ return function(mod)
             Font.draw("NONE PENDING", 16, 40)
           else
             local req = pendingRequests[self.page]
-            Font.draw(self.page .. "/" .. n .. "  " .. tostring(req.name or "?"), 16, 32)
+            Font.draw(self.page .. "/" .. n, 16, 32)
+            Font.draw(tostring(req.name or "?"):sub(1, 16), 16, 40)
             Font.draw("ID " .. tostring(req.trainer_id or "-----"), 16, 48)
             Font.draw("A:ACCEPT", 16, 104)
           end
