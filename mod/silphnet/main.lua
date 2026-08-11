@@ -970,9 +970,22 @@ return function(mod)
             end
             if input:wasPressed("b") then pendingRemoveFriend = nil; g.stack:pop() end
           elseif removeFriendState == "done" or removeFriendState == "failed" then
-            pendingRemoveFriend = nil
-            removeFriendState = "idle"
-            g.stack:pop()
+            -- The remove_friend handler (handleHttpResult) sets this state
+            -- AND fires fireFriendsFetch()/firePendingFetch() in the same
+            -- moment - but those are separate async HTTP calls that only
+            -- START here, they don't finish here. Popping straight back to
+            -- SilphNetFriends at this point meant it redrew from the OLD
+            -- in-memory `friends` table (still containing the just-removed
+            -- friend) until that third round-trip eventually landed - the
+            -- exact bug reported on-device: the removed friend stayed
+            -- visible until backing out and back in, or removing again.
+            -- Waiting here for friendsBusy/pendingBusy to clear means this
+            -- screen only pops once the friends list is ACTUALLY current.
+            if not friendsBusy and not pendingBusy then
+              pendingRemoveFriend = nil
+              removeFriendState = "idle"
+              g.stack:pop()
+            end
           end
         end
         function self:draw()
@@ -980,7 +993,13 @@ return function(mod)
           Font.draw("REMOVE FRIEND?", 16, 8)
           Font.draw("NAME", 16, 32)
           Font.draw(((pendingRemoveFriend and pendingRemoveFriend.name) or "?"):sub(1, 16), 16, 40)
-          if removeFriendState == "removing" then
+          if removeFriendState == "removing" or removeFriendState == "done" or removeFriendState == "failed" then
+            -- Covers the whole wait, not just the first round-trip - once
+            -- remove_friend.php responds, this screen still waits for the
+            -- follow-up friends/pending re-fetch to land (see the update()
+            -- comment above) before popping, so it should keep showing a
+            -- busy state the whole time rather than flashing back to the
+            -- original confirmation text for that gap.
             Font.draw("REMOVING...", 16, 56)
           else
             Font.draw("THEY WON'T SEE", 16, 56)
