@@ -573,7 +573,7 @@ return function(mod)
         end
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
-          Font.draw("SILPHNET", 16, 8)
+          Font.draw("- SILPHNET -", 16, 8)
           -- The box is drawn at 20x18 TILES (8px each) starting at pixel 0,
           -- but every line of text here starts at x=16 (2 tiles in), not
           -- x=0 - so the true remaining width is AT MOST 160-16=144px
@@ -640,6 +640,13 @@ return function(mod)
             Font.draw("DPAD R:ADD L:REQ", 16, 104)
           end
           Font.draw("B:BACK SL:RESET", 16, 120)
+          -- mod.version is read straight from manifest.json, so this can
+          -- never drift out of sync with a real release the way a
+          -- hand-typed string would. y=128 (not 136) leaves one clear
+          -- line of margin above the box's 144px bottom edge - the exact
+          -- same zero-margin mistake that clipped B:BACK/SL:RESET before
+          -- would repeat at y=136 (136+8=144, flush with the border).
+          Font.draw("V" .. tostring(mod.version or "?"), 16, 128)
         end
         return self
       end,
