@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.1.0 - async presence and friends, added in-game.** Log in with
+**Status: v1.1.8 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -50,7 +50,7 @@ them walk around in real time. The old real-time code is kept in
 ```
 mod/silphnet/           the LÖVE mod (install this into the game's mods/ folder)
   main.lua               client: HTTP login, presence ping/poll, friend markers
-  manifest.json          declares the "network" permission
+  manifest.json          declares the "network" permission, github field for auto-update
   mod.card               manager detail card
 dist/silphnet.zip        the mod, zipped and ready to install
 server/
@@ -65,8 +65,11 @@ server/
     friends.php             fetch friends' last-known positions (requires a token)
     add_friend.php           send a friend request by Trainer ID
     accept_friend.php        accept an incoming friend request
+    pending_requests.php     list incoming friend requests awaiting your accept
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
+assets/                  images used in this README (banner, etc.)
+.github/workflows/       the release pipeline - publishes a GitHub Release + zip on every push to mod/silphnet/
 ACCOUNTS.md               the account model (web and MySQL-backed)
 SECURITY.md               what plain HTTP and password hashing mean for safety
 ```
@@ -111,17 +114,22 @@ easiest) so they can add you.
 ### 3. Add friends and check the status screen
 
 Open **START** - the menu shows `SILPHNET <name>` once logged in, or a
-status message otherwise (`SILPHNET SET NAME/PASS`, `SILPHNET LOGIN FAIL`,
-`SILPHNET ...` while logging in). Select that row for the status screen:
+status message otherwise (`SILPHNET SET NAME/PASS` if MY NAME/PASSWORD
+aren't set yet, `SILPHNET NEW ACCT?` if that name doesn't have an account
+yet, `SILPHNET LOGIN FAIL`, or `SILPHNET ...` while logging in). Select
+that row for the status screen:
 
-- **A** - retry login
+- **A** - retry login, or (if no account exists yet for MY NAME) open a
+  confirmation screen before one gets created - nothing is ever registered
+  without this explicit confirmation
 - **START** - open the friends list (name, online/offline, last-known map
-  and tile, how long ago, game version)
+  and tile, how long ago)
 - **RIGHT** - open Add Friend (enter a Trainer ID with a digit spinner:
   **UP/DOWN** changes the selected digit, **LEFT/RIGHT** moves the cursor,
   **A** sends the request)
-- **LEFT** - open pending friend requests (shown when REQUESTS is above
-  zero; page through with **LEFT/RIGHT**, **A** to accept)
+- **LEFT** - open pending friend requests (always opens, showing "NONE
+  PENDING" if there aren't any; page through with **LEFT/RIGHT**, **A** to
+  accept)
 - **SELECT** - reset (clears the cached login on this device only)
 - **B** - back
 
@@ -186,9 +194,14 @@ real game):
 - `input.step` continuing to fire every fixed-step tick on the engine build
   in use - it's real and present in engine source but isn't in the curated
   wiki hook reference;
-- how (or whether) the engine exposes which ROM version (Red, Blue, or
-  Yellow) is running - `gameVersion` defaults to `"UNKNOWN"` until this is
-  wired up.
+- exact GB-screen text glyph width - `main.lua` assumes 8px/character and
+  budgets every screen conservatively under that, but this hasn't been
+  independently confirmed against the engine's font asset.
+
+There's deliberately no game-version (Red/Blue/Yellow) tracking: the
+engine doesn't expose which ROM a player imported anywhere in the mod API,
+so this can't be auto-detected, and there's no in-game picker for it
+either - see the Roadmap below.
 
 If something misbehaves, the `[silphnet]` manager errors will point right
 at it.
@@ -199,10 +212,14 @@ at it.
 2. Done - static friend markers on the map, plus a friends list with online/offline and time-ago
 3. Done - Trainer ID and in-game "add friend"/"accept friend" screens (digit entry, no typing)
 4. Done - GitHub auto-update, so the launcher can pull new mod releases directly (see `.github/workflows/release-silphnet.yml`)
-5. Multiple game-version tracking per account (Red/Blue/Yellow as separate "characters"), wired up to the real ROM
-6. Trainer card view (party, badges, League clears, game version)
-7. Battling a friend's last-known party as an offline NPC
-8. "Friend came online" notifications, custom greetings, unlockable battle music
+5. Done - account creation requires explicit confirmation; no silent registration and no fallback to your in-game trainer name
+6. Not currently possible - trainer card view (party, badges, League clears) and trading/battling a friend's real party: the
+   mod API has no documented way to read or write a player's party/box data outside the engine's own live, synchronous
+   link-play session (UDP, both players online at once), which doesn't fit SilphNet's async model. Revisit if a future
+   engine version exposes this.
+7. "Friend came online" notifications, custom greetings, unlockable battle music
+8. A custom-drawn UI (like other mods' non-Game-Boy-style menus) instead of the current `Font.drawBox` dialogue screens -
+   a real, separate visual overhaul, not a quick reskin
 
 See `ACCOUNTS.md` for the account design and `SECURITY.md` for the security
 model.
@@ -229,7 +246,7 @@ version of this mod), see `server/web/migrations.sql`.
 
 ## Notes
 
-Private repository. The `SilphNet_Technical_Specification` files are the
-original design study - see the project notes for a review of what holds
-up and what doesn't. The original real-time relay design lives in
+The `SilphNet_Technical_Specification` files are the original design
+study - see the project notes for a review of what holds up and what
+doesn't. The original real-time relay design lives in
 `archive/tcp_relay_retired/` if any of it is ever useful again.

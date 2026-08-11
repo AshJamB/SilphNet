@@ -566,7 +566,13 @@ return function(mod)
           if input:wasPressed("b") then g.stack:pop() end
           if input:wasPressed("start") then mod.ui.push(g, "SilphNetFriends") end
           if input:wasPressed("right") then addFriendStatus = ""; mod.ui.push(g, "SilphNetAddFriend") end
-          if input:wasPressed("left") and #pendingRequests > 0 then mod.ui.push(g, "SilphNetRequests") end
+          -- Always opens, even with 0 pending - previously gated behind
+          -- #pendingRequests > 0, which meant LEFT silently did nothing
+          -- at 0 with no feedback at all (looked like a dead/broken
+          -- button). SilphNetRequests already has a proper "NONE PENDING"
+          -- empty state, so there's no reason to hide it instead of
+          -- showing that.
+          if input:wasPressed("left") then mod.ui.push(g, "SilphNetRequests") end
           -- RESET lives here, on SELECT, rather than as a mod option - see
           -- the options:define comment above for why.
           if input:wasPressed("select") then mod.ui.push(g, "SilphNetResetConfirm") end
