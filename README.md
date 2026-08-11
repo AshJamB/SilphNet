@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.1.8 - async presence and friends, added in-game.** Log in with
+**Status: v1.2.0 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -65,6 +65,7 @@ server/
     friends.php             fetch friends' last-known positions (requires a token)
     add_friend.php           send a friend request by Trainer ID
     accept_friend.php        accept an incoming friend request
+    remove_friend.php        remove an accepted friend (or decline/cancel a pending request)
     pending_requests.php     list incoming friend requests awaiting your accept
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
@@ -138,14 +139,22 @@ number entry, in-game. Once accepted, they'll show up in the friends list
 and, when standing on their last-known map, as a static marker on the
 ground.
 
+On the friends list itself (**START** from the status screen), page
+through with **LEFT/RIGHT** or **A**, **SELECT** opens a confirm screen to
+remove the friend currently on screen (**A** confirms, **B** cancels) - it
+removes the friendship for both sides, not just locally.
+
 ### 4. Play
 
-Roughly every 30 seconds while in the overworld, the mod reports the
-current map and tile to the server and fetches friends' last-known
-positions back. If a friend's last-known map matches the one being
-explored, a static, non-animated marker appears at their last-known tile -
-it never moves on its own; if they move, the marker just relocates once on
-the next poll, not tweened or animated.
+Roughly every 30 seconds of actual play, the mod reports the current map
+and tile to the server and fetches friends' last-known positions back. The
+timer only advances while you're taking steps in the overworld rather than
+running on a strict background clock - standing still in a menu doesn't
+tick it forward, and it catches up on your next step once 30 seconds of
+real time have actually passed. If a friend's last-known map matches the
+one being explored, a static, non-animated marker appears at their
+last-known tile - it never moves on its own; if they move, the marker just
+relocates once on the next poll, not tweened or animated.
 
 ### Data usage
 
@@ -191,12 +200,20 @@ Marked `<< VERIFY >>` in `main.lua` (engine specifics not run against the
 real game):
 
 - the marker `sprite` id (`SPRITE_RED`) and exact `spawnNpc` object fields;
-- `input.step` continuing to fire every fixed-step tick on the engine build
-  in use - it's real and present in engine source but isn't in the curated
-  wiki hook reference;
 - exact GB-screen text glyph width - `main.lua` assumes 8px/character and
   budgets every screen conservatively under that, but this hasn't been
   independently confirmed against the engine's font asset.
+
+An earlier version drove its background presence/friends timer off
+`input.step`, a hook that's real in engine source but was never in the
+curated wiki hook reference and was marked `<< VERIFY >>` here for exactly
+that reason. Real two-player on-device testing eventually confirmed it:
+presence pings simply weren't firing, even after 60+ continuous seconds in
+the overworld. Checking the engine's actual generated-from-source hook
+catalog confirmed `input.step` isn't a documented hook at all, so the timer
+now runs off `world.stepped` instead - real, documented, and already relied
+on elsewhere in this mod - with the trade-off that the timer only advances
+on an actual step rather than a strict clock (see "Play" above).
 
 There's deliberately no game-version (Red/Blue/Yellow) tracking: the
 engine doesn't expose which ROM a player imported anywhere in the mod API,
@@ -213,12 +230,13 @@ at it.
 3. Done - Trainer ID and in-game "add friend"/"accept friend" screens (digit entry, no typing)
 4. Done - GitHub auto-update, so the launcher can pull new mod releases directly (see `.github/workflows/release-silphnet.yml`)
 5. Done - account creation requires explicit confirmation; no silent registration and no fallback to your in-game trainer name
-6. Not currently possible - trainer card view (party, badges, League clears) and trading/battling a friend's real party: the
+6. Done - remove an accepted friend (or decline/cancel a pending request), removing the friendship for both sides
+7. Not currently possible - trainer card view (party, badges, League clears) and trading/battling a friend's real party: the
    mod API has no documented way to read or write a player's party/box data outside the engine's own live, synchronous
    link-play session (UDP, both players online at once), which doesn't fit SilphNet's async model. Revisit if a future
    engine version exposes this.
-7. "Friend came online" notifications, custom greetings, unlockable battle music
-8. A custom-drawn UI (like other mods' non-Game-Boy-style menus) instead of the current `Font.drawBox` dialogue screens -
+8. "Friend came online" notifications, custom greetings, unlockable battle music
+9. A custom-drawn UI (like other mods' non-Game-Boy-style menus) instead of the current `Font.drawBox` dialogue screens -
    a real, separate visual overhaul, not a quick reskin
 
 See `ACCOUNTS.md` for the account design and `SECURITY.md` for the security
