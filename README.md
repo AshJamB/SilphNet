@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.2.2 - async presence and friends, added in-game.** Log in with
+**Status: v1.2.4 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -134,6 +134,11 @@ that row for the status screen:
 - **SELECT** - reset (clears the cached login on this device only)
 - **B** - back
 
+An **ABOUT SILPHNET** row also lives in the mod manager's own OPTIONS
+screen for SilphNet (not the in-game GB status screen, which is already at
+its practical space limit) - it shows who made this and a link to
+[ash.jamtv.co.uk](https://ash.jamtv.co.uk).
+
 No typing and no web page needed - adding a friend is entirely a Trainer ID
 number entry, in-game. Once accepted, they'll show up in the friends list
 and, when standing on their last-known map, as a static marker on the
@@ -216,6 +221,22 @@ catalog confirmed `input.step` isn't a documented hook at all, so the timer
 now runs off `world.stepped` instead - real, documented, and already relied
 on elsewhere in this mod - with the trade-off that the timer only advances
 on an actual step rather than a strict clock (see "Play" above).
+
+Switching to `world.stepped` fixed the timer but introduced a second real
+bug, also caught via on-device testing: results that finish while the
+player is standing still (not stepping) - a login started right at boot, an
+Add Friend request, a friend removal - could sit fully complete but unread
+in the background HTTP channel, showing "LOGGING IN.." or "SENDING..."
+indefinitely, since nothing was draining that channel except world.stepped
+itself. Checking the engine's mod object reference confirmed there's no
+generic per-frame hook independent of movement in this API at all - every
+documented hook/event ties to a specific gameplay moment. The fix: the
+channel-draining logic was split out from the presence timer into its own
+function, called both from `world.stepped` (general case) and directly from
+every screen's own `update(dt)` that's actually waiting on a result (the
+status screen while logging in, Add Friend while sending, the remove-friend
+confirm while removing) - `update(dt)` runs every frame regardless of
+movement, so those specific waits now resolve immediately.
 
 There's deliberately no game-version (Red/Blue/Yellow) tracking: the
 engine doesn't expose which ROM a player imported anywhere in the mod API,

@@ -20,6 +20,7 @@ return {
     },
   },
   credits = {
+    { who = "Ash Brittain (AshJam)", for_ = "SilphNet - concept, code, and server (ash.jamtv.co.uk)" },
     { who = "bryanthaboi", for_ = "Gen1Recomp engine and its mod platform" },
     { who = "Gamecorner33 & alamops", for_ = "Gen1Online / RBY MMO - prior art for the concept" },
   },

@@ -359,7 +359,17 @@ return function(mod)
   -- silently closing over globals instead, the very bug this paragraph
   -- warns about. Moving the declaration up here (above both callers) is
   -- the actual fix; onAuthOk itself was never touched again.
-  local fireFriendsFetch, firePendingFetch
+  --
+  -- drainHttpResults joined this forward-declaration for the exact same
+  -- reason, caught the exact same way (checking every caller's line number
+  -- against this declaration's) before it ever shipped: several screens
+  -- (SilphNetStatus, SilphNetAddFriend, SilphNetRemoveFriendConfirm,
+  -- SilphNetRequests) call it from their own update(dt) and are registered
+  -- further down but still BEFORE drainHttpResults' real body was originally
+  -- defined - which would have silently captured a nil global exactly like
+  -- onAuthOk did, made worse by every call site wrapping it in pcall(), so
+  -- it would have failed completely silently with no error ever logged.
+  local fireFriendsFetch, firePendingFetch, drainHttpResults
 
   local function onAuthOk(accId, name, token, trainerId)
     accountId, myName = accId, name or myName
@@ -638,6 +648,15 @@ return function(mod)
           if not pendingBusy then firePendingFetch() end
         end
         function self:update(dt)
+          -- Drains HTTP_RESULT directly here too, not just via
+          -- world.stepped - this is the screen a fresh login sits on, and
+          -- update(dt) fires every frame regardless of whether the player
+          -- is standing still, unlike world.stepped which needs an actual
+          -- step. Without this, a login started right at boot (before any
+          -- movement) could complete server-side but sit unpopped in the
+          -- channel, showing "LOGGING IN.." forever until the player
+          -- happened to walk somewhere - the exact bug reported on-device.
+          pcall(drainHttpResults)
           local input = g.input
           if input:wasPressed("a") then
             if authState == "confirm_register" then
@@ -896,6 +915,10 @@ return function(mod)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true }
         function self:update(dt)
+          -- Same reasoning as SilphNetStatus/SilphNetAddFriend above -
+          -- without this, "REMOVING..." could hang the same way "SENDING..."
+          -- did, waiting on a step that might not come for a while.
+          pcall(drainHttpResults)
           local input = g.input
           -- Once A has been pressed, removeFriendState moves to "removing"
           -- and this screen waits for the REAL server result (set by the
@@ -954,6 +977,13 @@ return function(mod)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true, digits = { 0, 0, 0, 0, 0 }, cursor = 1 }
         function self:update(dt)
+          -- Same reasoning as SilphNetStatus above: drains HTTP_RESULT
+          -- directly so a request that finishes while sitting on this
+          -- screen (not walking) resolves the SAME frame it completes on,
+          -- rather than getting stuck on "SENDING..." until the player
+          -- happens to take a step elsewhere - the second on-device bug
+          -- report, same root cause as the login one.
+          pcall(drainHttpResults)
           local input = g.input
           if input:wasPressed("up") then
             self.digits[self.cursor] = (self.digits[self.cursor] + 1) % 10
@@ -1007,6 +1037,11 @@ return function(mod)
         -- - out of date).
         if authState == "authed" and not pendingBusy then firePendingFetch() end
         function self:update(dt)
+          -- Same reasoning as SilphNetStatus/SilphNetAddFriend above - this
+          -- screen stays open after A (doesn't pop), so without this the
+          -- accepted request could keep showing here until the player
+          -- happened to take a step elsewhere.
+          pcall(drainHttpResults)
           local input = g.input
           local n = #pendingRequests
           if input:wasPressed("right") then self.page = (n == 0) and 1 or (self.page % n) + 1 end
@@ -1042,29 +1077,35 @@ return function(mod)
   end)
 
   -- ---- pump ---------------------------------------------------------------
-  -- Was previously wired to `input.step` (below, now removed) - a hook that
-  -- is REAL in engine source but, as the old comment here admitted, was
-  -- never in the curated wiki hook reference and marked << VERIFY >>. That
-  -- turned out to matter in practice: a real multi-minute on-device test
-  -- (two players, one idle in menus, one actively walking) showed presence
-  -- pings simply never firing even after 60+ clean seconds in the
-  -- overworld, while everything downstream of a real, documented event
-  -- (game.ready, mod.options_changed, map.entered) worked correctly every
-  -- time. Rather than keep trusting an undocumented hook that may not fire
-  -- reliably (or possibly at all) in the actual shipped engine build, pump
-  -- now runs off world.stepped - a real, documented, currently-relied-upon
-  -- event (Reference-Events: "hot path - keep listeners cheap") this mod
-  -- already listens to for position tracking. Trade-off: presence/friends/
-  -- pending only refresh when the player actually takes a step, not on a
-  -- strict wall-clock timer - acceptable for a "last known position" tool,
-  -- and vastly better than a timer that may never fire at all.
+  -- Split into two pieces on purpose, after a real bug report: a player
+  -- stuck on "LOGGING IN.." forever, and another stuck on "SENDING..."
+  -- forever, on the exact build that drove EVERYTHING (including draining
+  -- HTTP_RESULT) off world.stepped. That event only fires while physically
+  -- taking a step in the overworld (Reference-Events) - so a result that
+  -- finished while sitting on the status screen at boot, or the Add Friend
+  -- screen mid-request, could sit fully complete in the channel but never
+  -- get popped and applied until the player happened to walk somewhere.
+  -- Checked the engine's real mod-object reference for a genuine per-frame
+  -- hook independent of movement - there isn't one; every documented hook/
+  -- event is tied to a specific gameplay moment, not a generic tick. The
+  -- one thing that DOES reliably run every frame regardless of movement is
+  -- a screen's own update(dt) (ordinary UI state callback), so:
   --
-  -- Uses os.time() (real wall-clock seconds) rather than an accumulated dt,
-  -- since world.stepped's payload carries no delta-time field to accumulate
-  -- (see Reference-Events) - each call reads "how many seconds actually
-  -- passed" directly from the OS clock instead.
-  local lastPumpAt = nil
-  local function pump()
+  --   * drainHttpResults() - ONLY pops HTTP_RESULT and applies results.
+  --     Cheap, side-effect-free if the channel's empty, safe to call from
+  --     anywhere, as often as needed.
+  --   * pumpPresenceTimer() - the presence/friends/pending 30s schedule,
+  --     still driven off world.stepped (see the previous version of this
+  --     comment for why input.step was dropped in favour of it) - fine to
+  --     stay step-gated, since "last known position" data doesn't need to
+  --     update while standing still.
+  --
+  -- Every screen below that's actually waiting on a network result (status
+  -- screen while logging in, Add Friend while sending, the remove-friend
+  -- confirm while removing) now also calls drainHttpResults() directly from
+  -- its own update(dt), so those specific waits resolve on the very next
+  -- frame regardless of whether the player is standing still.
+  drainHttpResults = function()
     local r = HTTP_RESULT:pop()
     while r do
       local tag, status, body = string.match(r, "^([^|]*)|([^|]*)|(.*)$")
@@ -1095,7 +1136,14 @@ return function(mod)
       end
       r = HTTP_RESULT:pop()
     end
+  end
 
+  -- Uses os.time() (real wall-clock seconds) rather than an accumulated dt,
+  -- since world.stepped's payload carries no delta-time field to accumulate
+  -- (see Reference-Events) - each call reads "how many seconds actually
+  -- passed" directly from the OS clock instead.
+  local lastPumpAt = nil
+  local function pumpPresenceTimer()
     if authState ~= "authed" or not inOverworld then return end
     local now = os.time()
     if not lastPumpAt then lastPumpAt = now end
@@ -1139,14 +1187,16 @@ return function(mod)
   mod.events:on("world.stepped", function(ev)
     myMap, myX, myY = ev.mapId, ev.x, ev.y
     local cur = mod.world:current(); if cur then myFacing = cur.facing end
-    -- Drives the whole background pump (HTTP-result draining + the
-    -- presence/friends/pending timers) - see the long comment above pump()
-    -- for why this replaced the old input.step hook. world.stepped is
-    -- documented as a "hot path" (Reference-Events), so pump() itself stays
-    -- cheap: draining a thread channel and a handful of table reads/writes,
-    -- with the actual network calls gated behind the PRESENCE_INTERVAL
-    -- check so they don't fire on every single step.
-    pcall(pump)
+    -- Drives the presence/friends/pending 30s timer (see the long comment
+    -- above pumpPresenceTimer for why this replaced the old input.step
+    -- hook) plus a general-purpose drain for anything not covered by a
+    -- screen's own update(dt) call. world.stepped is documented as a "hot
+    -- path" (Reference-Events), so this stays cheap either way: draining a
+    -- thread channel and a handful of table reads/writes, with the actual
+    -- network calls gated behind the PRESENCE_INTERVAL check so they don't
+    -- fire on every single step.
+    pcall(drainHttpResults)
+    pcall(pumpPresenceTimer)
   end)
 
   mod.hooks:wrap("ui.start_menu.items", function(nextFn, g, items)
@@ -1155,5 +1205,54 @@ return function(mod)
         onSelect = function() mod.ui.push(g, "SilphNetStatus") end })
     end)
     return nextFn(g, items)
+  end)
+
+  -- Credits/about, added to the mod manager's OPTIONS screen rather than
+  -- the in-game GB status screen - that screen is already at its practical
+  -- limit on the same conservative 16-char / one-clear-line-of-margin
+  -- budget every other line here has to respect (see SilphNetStatus's
+  -- draw() comments), so a dedicated credits row would have meant cutting
+  -- something else to make room. ui.options.rows follows the exact same
+  -- anchored-insert pattern as ui.start_menu.items (Cookbook R31/R34), so
+  -- this is a real navigable row in the manager's per-mod options list,
+  -- not a fake settings field - onSelect pushes a real screen the same way
+  -- the Start-menu row above does.
+  mod.hooks:wrap("ui.options.rows", function(nextFn, g, rows)
+    pcall(function()
+      mod.ui.insertBefore(rows, "RESET DEFAULTS", { label = "ABOUT SILPHNET",
+        onSelect = function() mod.ui.push(g, "SilphNetAbout") end })
+    end)
+    return nextFn(g, rows)
+  end)
+
+  pcall(function()
+    mod.content.screens:register("SilphNetAbout", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          if g.input:wasPressed("b") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("- SILPHNET -", 16, 8)
+          Font.draw("BY ASH BRITTAIN", 16, 32)
+          Font.draw("(ASHJAM)", 16, 40)
+          -- Uppercase, not the URL's real casing - Gen 1's GB font is
+          -- uppercase-only in most contexts (menus, most dialogue; a few
+          -- special text boxes support lowercase in the real game), and
+          -- this couldn't be verified on-device here, so this plays it
+          -- safe rather than risk missing/garbled lowercase glyphs.
+          -- << VERIFY >> whether mod.ui.Font.draw actually supports
+          -- lowercase - if confirmed, this could go back to real casing.
+          Font.draw("ASH.JAMTV.CO.UK", 16, 56)
+          Font.draw("THANKS FOR", 16, 80)
+          Font.draw("PLAYING!", 16, 88)
+          Font.draw("V" .. tostring(mod.version or "?"), 16, 112)
+          Font.draw("B:BACK", 16, 128)
+        end
+        return self
+      end,
+    })
   end)
 end
