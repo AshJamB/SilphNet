@@ -12,7 +12,13 @@
 --   * Once logged in, the mod POSTs your current map/x/y/facing to the API
 --     every PRESENCE_INTERVAL seconds (see ping.php) and pulls your friends'
 --     last-known positions back (see friends.php). That's it - no live
---     socket, no per-tick movement sync.
+--     socket, no per-tick movement sync. The timer itself only advances
+--     while you're actually taking steps in the overworld (driven off the
+--     real, documented world.stepped event - see the comment above pump()
+--     for why an earlier version's undocumented input.step hook was
+--     replaced), so standing still in a menu doesn't tick it forward, and
+--     a ping fires on your next step once PRESENCE_INTERVAL real seconds
+--     have passed since the last one - not on a strict background clock.
 --   * A friend who's on the SAME map as your last-known position gets a
 --     static, non-animated NPC sprite placed at that tile (STAY movement,
 --     refreshed only when a new presence poll moves them) - a "someone was
@@ -316,23 +322,35 @@ return function(mod)
     httpPost("register", "/register.php", { name = myName, password = myPass })
   end
 
+  -- Forward-declared: onAuthOk (right below) and handleHttpResult (further
+  -- down) both need to trigger a fresh friends/pending fetch, but those
+  -- functions live in the "presence" section further down still. Declaring
+  -- the locals here, above BOTH callers, and assigning the real function
+  -- bodies later keeps every closure correctly bound to the SAME locals
+  -- (not globals) once they're assigned - the exact bug class that bit an
+  -- earlier version of this file when a function was defined before the
+  -- locals it referenced existed at all (caught via a lupa test harness).
+  -- onAuthOk was added as a second caller after this comment was written,
+  -- and initially called these two functions from ABOVE this declaration -
+  -- silently closing over globals instead, the very bug this paragraph
+  -- warns about. Moving the declaration up here (above both callers) is
+  -- the actual fix; onAuthOk itself was never touched again.
+  local fireFriendsFetch, firePendingFetch
+
   local function onAuthOk(accId, name, token, trainerId)
     accountId, myName = accId, name or myName
     if trainerId then myTrainerId = trainerId end
     authState, authBusy = "authed", false
     if token then pcall(function() mod.save:set("token", token) end) end
     mod.log:info("SilphNet: logged in as %s", tostring(myName))
+    -- Fire both fetches immediately on login rather than waiting for the
+    -- next 30s pump tick - previously a freshly-logged-in player could see
+    -- FRIENDS 0 / REQUESTS 0 for up to PRESENCE_INTERVAL seconds even when
+    -- the server already had real data, which looked like a bug (and did
+    -- hide a real pending request from a friend who'd just registered).
+    if not friendsBusy then fireFriendsFetch() end
+    if not pendingBusy then firePendingFetch() end
   end
-
-  -- Forward-declared: handleHttpResult (below) needs to trigger a fresh
-  -- friends/pending fetch right after an accept, but those functions live
-  -- in the "presence" section further down. Declaring the locals here and
-  -- assigning the real function bodies later keeps handleHttpResult's
-  -- closure correctly bound to the SAME locals (not globals) once they're
-  -- assigned - the exact bug class that bit an earlier version of this
-  -- file when a function was defined before the locals it referenced
-  -- existed at all (caught via a lupa test harness).
-  local fireFriendsFetch, firePendingFetch
 
   local function handleHttpResult(tag, status, body)
     if tag == "tok" then
@@ -381,7 +399,15 @@ return function(mod)
       end
     elseif tag == "add_friend" then
       if status == "OK" and jsonIsOk(body) then
-        addFriendStatus = "REQUEST SENT TO " .. tostring(jsonField(body, "name"))
+        -- "REQUEST SENT TO " alone is already 16 characters - the exact
+        -- draw-time truncation budget (addFriendStatus:sub(1, 16)) - so
+        -- appending any name here was ALWAYS going to get cut off entirely
+        -- before a single character of it could show, no matter who was
+        -- added. Ash's son saw exactly this: "REQUEST T" truncated further
+        -- still by the in-game font row width. "SENT TO " (8 chars) leaves
+        -- real room for names up to 8 characters before truncation kicks
+        -- in again.
+        addFriendStatus = "SENT TO " .. tostring(jsonField(body, "name"))
       else
         local err = jsonField(body, "error") or "FAILED"
         addFriendStatus = "ERROR: " .. tostring(err):upper()
@@ -554,6 +580,18 @@ return function(mod)
       new = function(g)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true }
+        -- Kick a fresh pending/friends fetch every time this screen opens,
+        -- not just on the 30s pump timer - previously opening this screen
+        -- (or SilphNetRequests via LEFT) right after logging in, or right
+        -- after a friend's request actually landed server-side, could show
+        -- stale (often empty) data for up to PRESENCE_INTERVAL seconds,
+        -- which looked exactly like a dead/broken button or a missing
+        -- request rather than what it actually was: data that just hadn't
+        -- been fetched yet.
+        if authState == "authed" then
+          if not friendsBusy then fireFriendsFetch() end
+          if not pendingBusy then firePendingFetch() end
+        end
         function self:update(dt)
           local input = g.input
           if input:wasPressed("a") then
@@ -846,6 +884,13 @@ return function(mod)
       new = function(g)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true, page = 1 }
+        -- Same reasoning as SilphNetStatus above: fetch fresh the moment
+        -- this screen opens, not just on the 30s timer, so pressing LEFT
+        -- from the status screen always shows the true current pending
+        -- list rather than whatever was last polled (which could be
+        -- several seconds - or, right after login, a full PRESENCE_INTERVAL
+        -- - out of date).
+        if authState == "authed" and not pendingBusy then firePendingFetch() end
         function self:update(dt)
           local input = g.input
           local n = #pendingRequests
@@ -882,12 +927,29 @@ return function(mod)
   end)
 
   -- ---- pump ---------------------------------------------------------------
-  -- Runs off `input.step` (Game:step, src/core/Game.lua) - fires every
-  -- deterministic FixedStep logic tick, before drawing, unconditionally.
-  -- Undocumented in the curated wiki hook reference but real and present in
-  -- engine source, explicitly meant for exactly this kind of background
-  -- "tool" mod. << VERIFY >> this keeps working across engine updates.
-  local function pump(dt)
+  -- Was previously wired to `input.step` (below, now removed) - a hook that
+  -- is REAL in engine source but, as the old comment here admitted, was
+  -- never in the curated wiki hook reference and marked << VERIFY >>. That
+  -- turned out to matter in practice: a real multi-minute on-device test
+  -- (two players, one idle in menus, one actively walking) showed presence
+  -- pings simply never firing even after 60+ clean seconds in the
+  -- overworld, while everything downstream of a real, documented event
+  -- (game.ready, mod.options_changed, map.entered) worked correctly every
+  -- time. Rather than keep trusting an undocumented hook that may not fire
+  -- reliably (or possibly at all) in the actual shipped engine build, pump
+  -- now runs off world.stepped - a real, documented, currently-relied-upon
+  -- event (Reference-Events: "hot path - keep listeners cheap") this mod
+  -- already listens to for position tracking. Trade-off: presence/friends/
+  -- pending only refresh when the player actually takes a step, not on a
+  -- strict wall-clock timer - acceptable for a "last known position" tool,
+  -- and vastly better than a timer that may never fire at all.
+  --
+  -- Uses os.time() (real wall-clock seconds) rather than an accumulated dt,
+  -- since world.stepped's payload carries no delta-time field to accumulate
+  -- (see Reference-Events) - each call reads "how many seconds actually
+  -- passed" directly from the OS clock instead.
+  local lastPumpAt = nil
+  local function pump()
     local r = HTTP_RESULT:pop()
     while r do
       local tag, status, body = string.match(r, "^([^|]*)|([^|]*)|(.*)$")
@@ -920,7 +982,10 @@ return function(mod)
     end
 
     if authState ~= "authed" or not inOverworld then return end
-    sincePresence = sincePresence + (dt or 1/60)
+    local now = os.time()
+    if not lastPumpAt then lastPumpAt = now end
+    sincePresence = sincePresence + (now - lastPumpAt)
+    lastPumpAt = now
     if sincePresence >= PRESENCE_INTERVAL then
       sincePresence = 0
       if not presenceBusy then firePresencePing() end
@@ -959,11 +1024,14 @@ return function(mod)
   mod.events:on("world.stepped", function(ev)
     myMap, myX, myY = ev.mapId, ev.x, ev.y
     local cur = mod.world:current(); if cur then myFacing = cur.facing end
-  end)
-
-  mod.hooks:wrap("input.step", function(nextFn, g, dt)
-    pcall(pump, dt)
-    return nextFn(g, dt)
+    -- Drives the whole background pump (HTTP-result draining + the
+    -- presence/friends/pending timers) - see the long comment above pump()
+    -- for why this replaced the old input.step hook. world.stepped is
+    -- documented as a "hot path" (Reference-Events), so pump() itself stays
+    -- cheap: draining a thread channel and a handful of table reads/writes,
+    -- with the actual network calls gated behind the PRESENCE_INTERVAL
+    -- check so they don't fire on every single step.
+    pcall(pump)
   end)
 
   mod.hooks:wrap("ui.start_menu.items", function(nextFn, g, items)
