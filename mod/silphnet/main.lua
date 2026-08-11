@@ -585,13 +585,23 @@ return function(mod)
   -- HAD just pinged (confirmed fresh in the database, e.g. 17 seconds old)
   -- still displayed as OFFLINE / "1 HR AGO" on-device: every last_seen was
   -- silently off by a full hour once BST began.
+  -- Lua 5.1/LuaJIT has no // floor-division operator (that's Lua 5.3+) -
+  -- an earlier draft of this used // throughout and passed a Lua 5.4-based
+  -- test harness in the sandbox used to verify it, but the real engine
+  -- (LOVE 11 / LuaJIT) rejected it outright with a real syntax error on
+  -- load ("unexpected symbol near '/'"), which took the mod down entirely
+  -- for every player until fixed - a gap in how this was verified before
+  -- shipping. floor() here is explicit for exactly that reason: every
+  -- division in this function needs floor (not Lua 5.1's default true
+  -- division, which returns a float) since daysFromCivil is pure integer
+  -- arithmetic throughout.
   local function daysFromCivil(y, m, d)
     y = (m <= 2) and (y - 1) or y
-    local era = (y >= 0 and y or y - 399) // 400
+    local era = math.floor((y >= 0 and y or y - 399) / 400)
     local yoe = y - era * 400
     local mp = (m + 9) % 12
-    local doy = (153 * mp + 2) // 5 + d - 1
-    local doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    local doy = math.floor((153 * mp + 2) / 5) + d - 1
+    local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
     return era * 146097 + doe - 719468
   end
 
