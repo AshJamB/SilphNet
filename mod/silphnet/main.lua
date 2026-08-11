@@ -163,6 +163,13 @@ return function(mod)
   local pendingRequests = {}   -- array of { name, trainer_id } - incoming requests awaiting YOUR accept
   local addFriendStatus = ""   -- last add-friend result, shown briefly on the Add Friend screen
   local pendingRemoveFriend = nil   -- { account_id, name } set by SilphNetFriends just before pushing the confirm screen
+  -- removeFriendState: idle|removing|done|failed - lets the confirm screen
+  -- wait for the REAL server result before popping back to SilphNetFriends,
+  -- rather than popping immediately on A and leaving the just-removed
+  -- friend still visible for the brief window before the async HTTP result
+  -- (and the fireFriendsFetch/firePendingFetch it triggers) actually comes
+  -- back - which could read as "that didn't work."
+  local removeFriendState = "idle"
 
   local function sanitizeName(s)
     if not s or s == "" then return nil end
@@ -258,9 +265,25 @@ return function(mod)
   -- table of field->value pairs (all as strings - callers tonumber() what
   -- they need). Not a general JSON parser; good enough for these known,
   -- server-controlled response shapes.
+  --
+  -- Scans ONLY inside the first [...] array in the body, not the whole
+  -- response - every caller's response shape is a wrapper object like
+  -- {"ok":true,"friends":[...]} or {"ok":true,"requests":[...]}, and that
+  -- OUTER object is itself a %{[^{}]-%} match. When the array is genuinely
+  -- empty ([]), scanning the whole body previously matched the wrapper
+  -- object itself as if it were a record, pulling out {ok = "true"} as a
+  -- single bogus entry with no name/trainer_id fields - which is exactly
+  -- what showed up as a phantom "REQUESTS 1" with a "?" name and "-----"
+  -- Trainer ID after every real pending row had been deleted, and why
+  -- pressing A on it silently did nothing (req.name was nil, failing the
+  -- "if req and req.name" guard on the requests screen). Restricting the
+  -- scan to between the array's [ and ] means an empty array correctly
+  -- yields zero records instead of one fake one.
   local function parseObjects(body)
     local out = {}
-    for obj in string.gmatch(body, "%{[^{}]-%}") do
+    local arrayBody = string.match(body, "%[(.-)%]")
+    if not arrayBody then return out end
+    for obj in string.gmatch(arrayBody, "%{[^{}]-%}") do
       local rec = {}
       for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*"?([^",}]*)"?') do
         rec[k] = v
@@ -424,8 +447,10 @@ return function(mod)
     elseif tag == "remove_friend" then
       if status == "OK" and jsonIsOk(body) then
         mod.log:info("SilphNet: friend removed")
+        removeFriendState = "done"
       else
         mod.log:warn("SilphNet: remove failed: %s", tostring(body))
+        removeFriendState = "failed"
       end
       -- Re-fetch regardless of success/failure, same as accept_friend -
       -- if it actually succeeded server-side but the response got lost,
@@ -872,21 +897,43 @@ return function(mod)
         local self = { game = g, isOpaque = true }
         function self:update(dt)
           local input = g.input
-          if input:wasPressed("a") then
-            if pendingRemoveFriend then fireRemoveFriend(pendingRemoveFriend.account_id) end
+          -- Once A has been pressed, removeFriendState moves to "removing"
+          -- and this screen waits for the REAL server result (set by the
+          -- remove_friend handler in handleHttpResult) before popping -
+          -- rather than popping immediately and leaving SilphNetFriends
+          -- showing the just-"removed" friend for the brief window before
+          -- the async HTTP result (and its own fireFriendsFetch/
+          -- firePendingFetch) actually lands, which could read as "that
+          -- didn't work." B still cancels immediately at any point before
+          -- a removal is actually in flight.
+          if removeFriendState == "idle" then
+            if input:wasPressed("a") then
+              if pendingRemoveFriend then
+                fireRemoveFriend(pendingRemoveFriend.account_id)
+                removeFriendState = "removing"
+              else
+                g.stack:pop()
+              end
+            end
+            if input:wasPressed("b") then pendingRemoveFriend = nil; g.stack:pop() end
+          elseif removeFriendState == "done" or removeFriendState == "failed" then
             pendingRemoveFriend = nil
+            removeFriendState = "idle"
             g.stack:pop()
           end
-          if input:wasPressed("b") then pendingRemoveFriend = nil; g.stack:pop() end
         end
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
           Font.draw("REMOVE FRIEND?", 16, 8)
           Font.draw("NAME", 16, 32)
           Font.draw(((pendingRemoveFriend and pendingRemoveFriend.name) or "?"):sub(1, 16), 16, 40)
-          Font.draw("THEY WON'T SEE", 16, 56)
-          Font.draw("YOUR POSITION", 16, 64)
-          Font.draw("ANYMORE", 16, 72)
+          if removeFriendState == "removing" then
+            Font.draw("REMOVING...", 16, 56)
+          else
+            Font.draw("THEY WON'T SEE", 16, 56)
+            Font.draw("YOUR POSITION", 16, 64)
+            Font.draw("ANYMORE", 16, 72)
+          end
           Font.draw("A:CONFIRM REMOVE", 16, 120)
           Font.draw("B:CANCEL", 16, 128)
         end

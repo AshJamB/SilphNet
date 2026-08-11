@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.2.0 - async presence and friends, added in-game.** Log in with
+**Status: v1.2.2 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -142,7 +142,9 @@ ground.
 On the friends list itself (**START** from the status screen), page
 through with **LEFT/RIGHT** or **A**, **SELECT** opens a confirm screen to
 remove the friend currently on screen (**A** confirms, **B** cancels) - it
-removes the friendship for both sides, not just locally.
+removes the friendship for both sides, not just locally, and the screen
+waits for the server to actually confirm the removal (showing "REMOVING...")
+before returning to the friends list, rather than popping immediately.
 
 ### 4. Play
 
