@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.4.2 - async presence and friends, added in-game.** Log in with
+**Status: v1.4.3 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -116,11 +116,14 @@ easiest) so they can add you.
 
 ### 3. Add friends and check the status screen
 
-Open **START** - the menu shows `SILPHNET <name>` once logged in, or a
-status message otherwise (`SILPHNET SET NAME/PASS` if MY NAME/PASSWORD
-aren't set yet, `SILPHNET NEW ACCT?` if that name doesn't have an account
-yet, `SILPHNET LOGIN FAIL`, or `SILPHNET ...` while logging in). Select
-that row for the status screen:
+Open **START** - the menu shows `SN <name>` once logged in, or a
+status message otherwise (`SN SET NAME/PASS` if MY NAME/PASSWORD
+aren't set yet, `SN NEW ACCT?` if that name doesn't have an account
+yet, `SN LOGIN FAIL`, or `SN ...` while logging in). Kept short
+("SN", not "SILPHNET") since some third-party UI mods truncate Start
+Menu rows by simply chopping off anything past a length limit rather
+than adding an ellipsis - a longer label could disappear entirely
+depending on name length. Select that row for the status screen:
 
 - **Before logging in**: **A** retries login, or (if no account exists
   yet for MY NAME) opens a confirmation screen before one gets created -
@@ -135,7 +138,7 @@ that row for the status screen:
   matching how A is used everywhere else in this mod (accepting a
   request, confirming a removal).
 A second Start Menu row, **SN NEARBY**, sits right below the main
-**SILPHNET \<name\>** row (rather than being folded into the friends
+**SN \<name\>** row (rather than being folded into the friends
 list) and opens its own screen: everyone else currently on your own
 map, by name and Trainer ID, Pokémon-Go-style - titled with how many
 people are there (`- NEARBY (n) -`) and the map name underneath.

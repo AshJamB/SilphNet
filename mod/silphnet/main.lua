@@ -739,13 +739,19 @@ return function(mod)
     return math.floor(secs / 3600) .. " HR AGO"
   end
 
+  -- "SN" here, not "SILPHNET" - reported on a real device running a UI
+  -- mod that chops long Start Menu labels off entirely rather than
+  -- truncating with an ellipsis, so "SILPHNET <name>" could disappear
+  -- altogether depending on name length. Matches the "SN NEARBY" row
+  -- already added below, so both SilphNet rows share the same short
+  -- prefix rather than one being "SILPHNET" and the other "SN".
   local function statusLabel()
-    if authState == "authed" then return "SILPHNET " .. myName end
-    if authState == "confirm_register" then return "SILPHNET NEW ACCT?" end
-    if authState == "need_creds" then return "SILPHNET SET NAME/PASS" end
-    if authState == "failed" then return "SILPHNET LOGIN FAIL" end
-    if authState == "logging_in" then return "SILPHNET ..." end
-    return "SILPHNET OFF"
+    if authState == "authed" then return "SN " .. myName end
+    if authState == "confirm_register" then return "SN NEW ACCT?" end
+    if authState == "need_creds" then return "SN SET NAME/PASS" end
+    if authState == "failed" then return "SN LOGIN FAIL" end
+    if authState == "logging_in" then return "SN ..." end
+    return "SN OFF"
   end
 
   -- Doesn't repeat myName here even when logged in - the NAME row right
@@ -889,21 +895,12 @@ return function(mod)
               seenPeople[f.account_id] = true; n = n + 1
             end
           end
-          -- Folded the global online count onto the FRIENDS line rather
-          -- than giving it a whole row of its own - this screen has no
-          -- spare vertical space (see the margin notes above). Kept
-          -- deliberately tight ("FRIENDS9 ON999" = 14 chars) so even a
-          -- 2-digit friend count plus a 3-digit online count - the
-          -- realistic worst case if this ever grows - stays inside the
-          -- <=16-char safety budget every other line here uses; the
-          -- looser "FRIENDS 99  ON 999" spacing was checked and does
-          -- NOT fit (18 chars), which is why there's no space before
-          -- the numbers.
-          -- "--" (not "0") until the first successful fetch lands, so a
-          -- brief 0 right after login doesn't misread as "genuinely
-          -- nobody online" - same reasoning as trainer ID showing
-          -- "-----" before it's known rather than a blank or a 0.
-          Font.draw("FRIENDS" .. n .. " ON" .. (onlineCount and tostring(onlineCount) or "--"), 16, 72)
+          -- Reverted to the original "FRIENDS n" spacing (readable, not
+          -- squashed) - the online count moved down onto the A:FRIENDS
+          -- hint line instead of squeezing onto this one, per direct
+          -- feedback that "FRIENDS3" (glued together) looked worse than
+          -- either line looked before this feature existed.
+          Font.draw("FRIENDS " .. n, 16, 72)
           Font.draw("REQUESTS " .. #pendingRequests, 16, 80)
           -- "RT"/"LT" here mean the D-PAD's right/left, NOT shoulder
           -- buttons - this device has no L/R at all (D-pad, A, B, SELECT,
@@ -922,9 +919,19 @@ return function(mod)
             Font.draw("SET NAME+PASS IN", 16, 104)
             Font.draw("MOD OPTIONS MENU", 16, 112)
           else
-            Font.draw("A:FRIENDS", 16, 96)
+            -- Online count moved here, onto the A:FRIENDS hint line
+            -- itself, rather than squeezed onto the FRIENDS/REQUESTS
+            -- data line above (which came out "FRIENDS3" - digits glued
+            -- straight onto the label with no space, reported as looking
+            -- worse than before this feature existed) or given its own
+            -- ST:RE-AUTH line (also reported as too squashed, and that
+            -- hint didn't exist on this screen before - re-auth already
+            -- works fine unlabelled, so it's dropped rather than adding
+            -- a line that wasn't there previously). No space after the
+            -- colon ("FRIENDS(" not "FRIENDS (") keeps this at 16 chars
+            -- even at a double-digit online count.
+            Font.draw("A:FRIENDS(" .. (onlineCount and tostring(onlineCount) or "-") .. " ON)", 16, 96)
             Font.draw("DPAD R:ADD L:REQ", 16, 104)
-            Font.draw("ST:RE-AUTH", 16, 112)
           end
           Font.draw("B:BACK SL:RESET", 16, 120)
           -- mod.version is read straight from manifest.json, so this can

@@ -15,6 +15,7 @@ return {
     },
     changed = {
       "Status screen controls swapped once logged in: A now opens the friends list (was START), START is now re-auth (was A's secondary job). Pre-login, A still retries login / confirms account creation exactly as before - only the post-login bindings changed.",
+      "Start Menu labels shortened from \"SILPHNET\" to \"SN\" (e.g. \"SN ASHJAM\", \"SN NEARBY\", \"SN SET NAME/PASS\") - some third-party UI mods truncate long Start Menu rows by chopping off anything past a length limit rather than adding an ellipsis, so a longer label could disappear entirely depending on name length. The full-screen status title (\"- SILPHNET -\") is unchanged since that's a roomier context.",
     },
     known = {
       "Marker sprite is fixed to SPRITE_RED for now",
