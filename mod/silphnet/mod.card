@@ -10,9 +10,11 @@ return {
       "GitHub auto-update: manifest.json now sets \"github\" so the launcher's Update / Other Versions can pull new releases directly - see .github/workflows/release-silphnet.yml (packages only mod/silphnet/, never the server source or docs, as a GitHub Release .zip on every push to main that touches the mod).",
       "Friend markers show their name: press A on a friend's map marker to see who it is, in a small text box that closes on A or B - a live lookup done at the moment you press A, not baked in when the marker appeared.",
       "Friends list now shows each friend's Trainer ID, and a LEFT/RIGHT:PAGE hint when you have more than one friend.",
+      "Global online count: shown on the status screen's FRIENDS line (\"FRIENDSn ONn\") - everyone currently online, not just friends.",
+      "NEARBY: a second Start Menu row (\"SN NEARBY\") opens its own screen showing everyone else currently on your own map, by name and Trainer ID, titled with how many people are there and the map name - Pokemon-Go-style. Shows ALREADY A FRIEND for someone you've added, or NOT YET A FRIEND with a reminder to add them the normal way (RIGHT from the SilphNet status screen) using the Trainer ID shown.",
     },
     changed = {
-      "Nothing else changed from v1.0.0's async presence model - see that version's notes for the account/presence/marker system.",
+      "Status screen controls swapped once logged in: A now opens the friends list (was START), START is now re-auth (was A's secondary job). Pre-login, A still retries login / confirms account creation exactly as before - only the post-login bindings changed.",
     },
     known = {
       "Marker sprite is fixed to SPRITE_RED for now",

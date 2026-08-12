@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.3.3 - async presence and friends, added in-game.** Log in with
+**Status: v1.4.2 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -67,6 +67,8 @@ server/
     accept_friend.php        accept an incoming friend request
     remove_friend.php        remove an accepted friend (or decline/cancel a pending request)
     pending_requests.php     list incoming friend requests awaiting your accept
+    online_count.php         count of everyone currently online, globally (not just friends)
+    nearby.php               everyone else (friend or not) currently on a given map
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
 assets/                  images used in this README (banner, etc.)
@@ -120,11 +122,28 @@ aren't set yet, `SILPHNET NEW ACCT?` if that name doesn't have an account
 yet, `SILPHNET LOGIN FAIL`, or `SILPHNET ...` while logging in). Select
 that row for the status screen:
 
-- **A** - retry login, or (if no account exists yet for MY NAME) open a
-  confirmation screen before one gets created - nothing is ever registered
-  without this explicit confirmation
-- **START** - open the friends list (name, online/offline, last-known map
-  and tile, how long ago)
+- **Before logging in**: **A** retries login, or (if no account exists
+  yet for MY NAME) opens a confirmation screen before one gets created -
+  nothing is ever registered without this explicit confirmation. START
+  does nothing yet at this point - there's no friends list to show
+  before you're logged in.
+- **Once logged in**: **A** opens the friends list (name, online/offline,
+  last-known map and tile, how long ago) - also shows a global online
+  count and your friend count on the same line (`FRIENDSn ONn`). **START**
+  is now re-auth (forces a fresh login check) - swapped from the
+  original layout since A feels more natural as the "open/select" button,
+  matching how A is used everywhere else in this mod (accepting a
+  request, confirming a removal).
+A second Start Menu row, **SN NEARBY**, sits right below the main
+**SILPHNET \<name\>** row (rather than being folded into the friends
+list) and opens its own screen: everyone else currently on your own
+map, by name and Trainer ID, Pokémon-Go-style - titled with how many
+people are there (`- NEARBY (n) -`) and the map name underneath.
+Someone already on your friends list shows **ALREADY A FRIEND** instead
+of an add prompt; anyone else shows **NOT YET A FRIEND** with a
+reminder to add them the normal way (**RIGHT** from the status screen,
+entering their shown Trainer ID) - there's no separate "add" button on
+the NEARBY screen itself, to avoid building the same flow twice.
 - **RIGHT** - open Add Friend (enter a Trainer ID with a digit spinner:
   **UP/DOWN** changes the selected digit, **LEFT/RIGHT** moves the cursor,
   **A** sends the request)
@@ -267,6 +286,18 @@ real game):
   Fixed by making the box 6 rows tall, matching the one-clear-row-above-
   the-border rule every other screen in this file already follows - not
   yet re-confirmed on-device.
+- the global online counter and the NEARBY screen (both added this
+  session): the server endpoints and NEARBY's paging logic were tested
+  in isolation (a standalone Lua test confirming paging wraps correctly
+  in both directions, including the empty-list case), the Start Menu's
+  two-row anchored insertion was also tested standalone (confirms both
+  SilphNet rows land together, in order, directly above QUIT), and the
+  full file compiles cleanly under real LuaJIT - but none of this has
+  been pressed on a real device yet. NEARBY briefly shipped as a mode
+  toggled by START inside the friends list before being pulled back out
+  into its own Start Menu row/screen, once it was clear the mod could
+  simply add more Start Menu entries as it grows rather than needing to
+  cram new features into existing screens.
 
 An earlier version drove its background presence/friends timer off
 `input.step`, a hook that's real in engine source but was never in the
@@ -305,19 +336,125 @@ at it.
 
 ## Roadmap
 
+### Shipped
+
 1. Done - async presence: login, periodic position reporting, friends' last-known positions
 2. Done - static friend markers on the map, plus a friends list with online/offline and time-ago
 3. Done - Trainer ID and in-game "add friend"/"accept friend" screens (digit entry, no typing)
 4. Done - GitHub auto-update, so the launcher can pull new mod releases directly (see `.github/workflows/release-silphnet.yml`)
 5. Done - account creation requires explicit confirmation; no silent registration and no fallback to your in-game trainer name
 6. Done - remove an accepted friend (or decline/cancel a pending request), removing the friendship for both sides
-7. Not currently possible - trainer card view (party, badges, League clears) and trading/battling a friend's real party: the
-   mod API has no documented way to read or write a player's party/box data outside the engine's own live, synchronous
-   link-play session (UDP, both players online at once), which doesn't fit SilphNet's async model. Revisit if a future
-   engine version exposes this.
-8. "Friend came online" notifications, custom greetings, unlockable battle music
-9. A custom-drawn UI (like other mods' non-Game-Boy-style menus) instead of the current `Font.drawBox` dialogue screens -
-   a real, separate visual overhaul, not a quick reskin
+7. Done - press A on a friend's map marker to see their name, live-looked-up, closing on A or B
+8. Done - global online counter (folded onto the status screen's FRIENDS line, "FRIENDSn ONn")
+9. Done - "who's nearby" (non-friends) - its own Start Menu row ("SN NEARBY") and screen, showing everyone else's name/Trainer ID on your current map, friend or not
+10. Done - status screen controls swapped once logged in: A opens the friends list, START is re-auth (was the other way round)
+
+### Next up
+
+These are aimed at the core problem raised in planning: with few friends
+added yet, the mod has little to offer a new player. Grounded against
+the actual documented mod API (`Reference-Events`, `Reference-Hooks`,
+`Reference-Registries` on the [gen1recomp wiki](https://github.com/bryanthaboi/gen1recomp/wiki)) rather than assumed:
+
+11. **Friends-who-cleared-this-gym sign.** A new, clearly-distinct sign/NPC
+   placed in each gym (not a rewrite of the vanilla statue's own text,
+   which is frozen per-map content the mod can't rewrite per-viewer) -
+   shows which of your friends have beaten that gym leader. Needs a
+   deliberately different look (different sprite, or a `[!]`/`[?]`-style
+   marker rather than a plain statue) and careful placement so it never
+   sits in a trainer's path or blocks a walkway - existing gym layouts
+   need checking map-by-map before placement. Data source: same
+   `pokemon.caught`-style event family, specifically detecting an
+   Elite-Four-class trainer win via `battle.ended`/`world.trainer_engaged`,
+   reported to the server per-gym the same way presence already reports
+   per-map.
+12. **Auto status updates** ("Just caught a level 38 EKANS", "Just beat
+    Bug Catcher"). Fully supported by real, documented events:
+    `pokemon.caught { mon, species, isNew, ball, ... }`,
+    `battle.ended { battle, result }`, `pokemon.evolved`,
+    `pokemon.level_up`. The mod listens for these and posts a short
+    status string to the server on the next presence cycle; friends see
+    it next to that friend's entry until it's superseded by a newer one.
+13. **Account webpage** - change username/password and, notably, your
+    Trainer ID. Needs to answer: what happens to an already-logged-in
+    device when its Trainer ID changes server-side mid-session? Today
+    the mod only reads its own Trainer ID once, right after
+    login/register - it's cached in `myTrainerId` and never re-fetched.
+    So without extra work, a changed ID would only take effect after
+    that device's cached token is invalidated and it logs in again (the
+    same path MY NAME/PASSWORD changes already use - see
+    `mod.options_changed` in `main.lua`) - no full game restart needed,
+    but a fresh login is. If instant in-session updates matter, the
+    presence-poll cycle could also carry back "your ID changed" and
+    force a silent re-auth automatically; otherwise this is a documented
+    limitation ("changes take effect next login") rather than a bug.
+14. **Leaderboards.** Cheapest/safest options rank on data the server
+    already has or can easily start recording: most accepted friends,
+    longest current login streak (consecutive days pinged), most maps
+    visited, first-to-clear-the-league (self-reported, honor system -
+    see item 15). A "most Pokémon caught" or "highest Pokédex count"
+    board needs the stats-snapshot mechanism from item 16 first, since
+    that data lives in each player's own save file, not the database.
+
+### Unblocked - confirmed against the engine's real source
+
+A real exported save (`gen1recomp-blue-slot1.sav`) was analyzed byte by
+byte against the public Gen 1 save-file format, THEN the engine's actual
+GitHub source (`src/core/SaveData.lua`) was fetched and grepped directly
+to find the real Lua-level field names a mod would use - not raw byte
+offsets. Full breakdown in `research/gen1-save-format-findings.md`.
+Confirmed, from the engine's own working code:
+
+- `save.party` - a plain Lua array of mon objects (`mon.species`,
+  `mon.level`, `mon.moves`, `mon.dvs`, `mon.stats`), already resolved to
+  real ids, no lookup table needed.
+- `save.pokedex.owned` / `save.pokedex.seen` - sets keyed by species id;
+  count via `pairs()` for a Pokédex count (this is literally what the
+  engine's own title-screen slot summary does).
+- `save.playTime` - a plain seconds count OR a `{hours, minutes, seconds,
+  frames}` table depending on engine build; the engine's own code checks
+  the type before reading it, and SilphNet should too.
+- `save.hallOfFame` - a list of Champion-clear entries; empty means never
+  beaten. This matches what the raw .sav showed (empty = not yet beaten).
+- `save.player.name` - already known, now doubly confirmed.
+- `save.flags` - confirmed directly readable/writable at runtime from a
+  real, working example (Tutorial 08's `onStep` handler sets
+  `game.save.flags.TUT8_HINTED` directly) - the same access pattern
+  should work for `game.save.party` etc., no special event needed.
+- Badges are the one exception: not a plain field, derived internally via
+  `Badges.count()` in a module mods can't `require` (not on the
+  documented safe-require allowlist). Likely workaround: cross-check
+  `save.inventory` against the `constants.badges` registry (each badge
+  resolves to a real item id) - not yet tested against a real save.
+
+15. **Community Champion.** The remaining blocker is specifically about
+    battling, not data access: another player's live party can only be
+    READ from their own local save (confirmed possible, per above) -
+    there's still no documented way to read or write a DIFFERENT
+    player's party, or referee a real synchronous battle against them
+    outside the engine's own same-room link-play session. So the
+    buildable version is: once a player legitimately clears the League
+    (a non-empty `save.hallOfFame`), their mod reads its own
+    `save.party` and uploads it as a JSON snapshot naming them the
+    reigning Champion. Anyone can view that snapshot read-only ("here's
+    what you'd be up against"), but any actual "fight" against it would
+    be honor-system only (both sides self-report the result), not
+    something the mod verifies or enforces.
+16. **Per-friend detail screen** (play time, badges, Pokédex count,
+    League clears). Confirmed buildable: a richer stats snapshot read
+    straight from `save.party`, `save.pokedex.owned`, `save.playTime`,
+    and `save.hallOfFame`, reported on the same ~30s cycle as presence.
+    Badges need the inventory-based workaround above tested first. Once
+    the snapshot exists server-side, a new screen (opened from a
+    friend's entry on the friends list) shows it.
+
+### Smaller UI polish, not yet scheduled
+
+17. "Friend came online" notifications, custom greetings, unlockable
+    battle music.
+18. A custom-drawn UI (like other mods' non-Game-Boy-style menus)
+    instead of the current `Font.drawBox` dialogue screens - a real,
+    separate visual overhaul, not a quick reskin.
 
 See `ACCOUNTS.md` for the account design and `SECURITY.md` for the security
 model.

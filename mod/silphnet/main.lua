@@ -439,7 +439,7 @@ return function(mod)
   -- defined - which would have silently captured a nil global exactly like
   -- onAuthOk did, made worse by every call site wrapping it in pcall(), so
   -- it would have failed completely silently with no error ever logged.
-  local fireFriendsFetch, firePendingFetch, drainHttpResults
+  local fireFriendsFetch, firePendingFetch, drainHttpResults, fireOnlineCountFetch, fireNearbyFetch
 
   local function onAuthOk(accId, name, token, trainerId)
     accountId, myName = accId, name or myName
@@ -545,6 +545,15 @@ return function(mod)
   local presenceBusy   = false
   local friendsBusy     = false
   local pendingBusy      = false
+  local onlineCountBusy   = false
+  local nearbyBusy         = false
+
+  -- Global online count (everyone, not just friends) and who's on the
+  -- CURRENT map (friend or not) - both use the same ~30s cycle as
+  -- presence/friends/pending, same reasoning: cheap, small, gated behind
+  -- PRESENCE_INTERVAL so standing still doesn't spam the server.
+  local onlineCount = nil   -- nil until the first successful fetch
+  local nearby = {}         -- array of { account_id, name, trainer_id }, current map only
 
   local function firePresencePing()
     if authState ~= "authed" or not myMap then return end
@@ -566,6 +575,21 @@ return function(mod)
     if authState ~= "authed" then return end
     pendingBusy = true
     httpGet("pending", "/pending_requests.php", { token = mod.save:get("token") or "" })
+  end
+
+  fireOnlineCountFetch = function()
+    if authState ~= "authed" then return end
+    onlineCountBusy = true
+    httpGet("online_count", "/online_count.php", { token = mod.save:get("token") or "" })
+  end
+
+  -- Only meaningful in the overworld with a known map - same guard
+  -- firePresencePing already uses, since "nearby" without a real map_id
+  -- is a meaningless query.
+  fireNearbyFetch = function()
+    if authState ~= "authed" or not myMap then return end
+    nearbyBusy = true
+    httpPost("nearby", "/nearby.php", { token = mod.save:get("token") or "", map_id = myMap })
   end
 
   local function fireAddFriend(trainerId)
@@ -784,15 +808,29 @@ return function(mod)
           -- happened to walk somewhere - the exact bug reported on-device.
           pcall(drainHttpResults)
           local input = g.input
-          if input:wasPressed("a") then
-            if authState == "confirm_register" then
-              mod.ui.push(g, "SilphNetRegisterConfirm")
-            else
-              beginAuth()
+          -- A/START swapped from the original layout: A now opens the
+          -- friends list (feels more natural - it's the "confirm/select"
+          -- button everywhere else in this mod, e.g. accepting a request,
+          -- confirming a removal), and START is re-auth. Only swapped
+          -- while authed, though - pre-login there's no friends list to
+          -- show yet, so A keeps doing the one thing that's actually
+          -- useful at that point (retry login, or confirm account
+          -- creation), exactly as before. This avoids a confusing state
+          -- where A opens an empty/broken friends screen before you've
+          -- even logged in.
+          if authState == "authed" then
+            if input:wasPressed("a") then mod.ui.push(g, "SilphNetFriends") end
+            if input:wasPressed("start") then beginAuth() end
+          else
+            if input:wasPressed("a") then
+              if authState == "confirm_register" then
+                mod.ui.push(g, "SilphNetRegisterConfirm")
+              else
+                beginAuth()
+              end
             end
           end
           if input:wasPressed("b") then g.stack:pop() end
-          if input:wasPressed("start") then mod.ui.push(g, "SilphNetFriends") end
           if input:wasPressed("right") then addFriendStatus = ""; mod.ui.push(g, "SilphNetAddFriend") end
           -- Always opens, even with 0 pending - previously gated behind
           -- #pendingRequests > 0, which meant LEFT silently did nothing
@@ -851,7 +889,21 @@ return function(mod)
               seenPeople[f.account_id] = true; n = n + 1
             end
           end
-          Font.draw("FRIENDS  " .. n, 16, 72)
+          -- Folded the global online count onto the FRIENDS line rather
+          -- than giving it a whole row of its own - this screen has no
+          -- spare vertical space (see the margin notes above). Kept
+          -- deliberately tight ("FRIENDS9 ON999" = 14 chars) so even a
+          -- 2-digit friend count plus a 3-digit online count - the
+          -- realistic worst case if this ever grows - stays inside the
+          -- <=16-char safety budget every other line here uses; the
+          -- looser "FRIENDS 99  ON 999" spacing was checked and does
+          -- NOT fit (18 chars), which is why there's no space before
+          -- the numbers.
+          -- "--" (not "0") until the first successful fetch lands, so a
+          -- brief 0 right after login doesn't misread as "genuinely
+          -- nobody online" - same reasoning as trainer ID showing
+          -- "-----" before it's known rather than a blank or a 0.
+          Font.draw("FRIENDS" .. n .. " ON" .. (onlineCount and tostring(onlineCount) or "--"), 16, 72)
           Font.draw("REQUESTS " .. #pendingRequests, 16, 80)
           -- "RT"/"LT" here mean the D-PAD's right/left, NOT shoulder
           -- buttons - this device has no L/R at all (D-pad, A, B, SELECT,
@@ -870,8 +922,9 @@ return function(mod)
             Font.draw("SET NAME+PASS IN", 16, 104)
             Font.draw("MOD OPTIONS MENU", 16, 112)
           else
-            Font.draw("ST:FRIENDS", 16, 96)
+            Font.draw("A:FRIENDS", 16, 96)
             Font.draw("DPAD R:ADD L:REQ", 16, 104)
+            Font.draw("ST:RE-AUTH", 16, 112)
           end
           Font.draw("B:BACK SL:RESET", 16, 120)
           -- mod.version is read straight from manifest.json, so this can
@@ -1038,6 +1091,87 @@ return function(mod)
           -- paging does nothing with 0 or 1.
           if #ids > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, 120) end
           Font.draw("B:BACK SL:REMOVE", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Nearby players - who else (friend or not) is currently on YOUR map,
+  -- reached via its own Start Menu row ("SN NEARBY") rather than a mode
+  -- toggle bolted onto SilphNetFriends. Deliberately much simpler than
+  -- Friends - just a name and Trainer ID per page, no map/tile/time-ago,
+  -- since these are people you haven't added yet and the mod has no
+  -- relationship with them beyond "currently on your map". Add-by-ID
+  -- still goes through the existing Add Friend screen (DPAD RIGHT from
+  -- the SilphNet status screen) using the Trainer ID shown here - no
+  -- separate "add" action wired up directly from this screen, to avoid
+  -- duplicating that flow in two places.
+  pcall(function()
+    mod.content.screens:register("SilphNetNearby", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true, page = 1 }
+        function self:update(dt)
+          local input = g.input
+          if input:wasPressed("right") or input:wasPressed("a") then
+            self.page = (#nearby == 0) and 1 or (self.page % #nearby) + 1
+          end
+          if input:wasPressed("left") then
+            self.page = (#nearby == 0) and 1 or ((self.page - 2) % #nearby) + 1
+          end
+          if input:wasPressed("b") then g.stack:pop() end
+        end
+        -- A nearby entry is only "account_id" - friends are keyed on
+        -- "account_id|game_version" (one friend can have several active
+        -- saves), so this checks by account_id alone across every
+        -- friends[] entry rather than reconstructing that composite key.
+        -- Without this, a friend standing right next to you would have
+        -- shown "NOT YET A FRIEND" here, which is wrong - caught before
+        -- shipping by walking through what this screen would say for
+        -- someone you'd already added.
+        local function isAlreadyFriend(accountId)
+          if not accountId then return false end
+          for _, f in pairs(friends) do
+            if f.account_id == accountId then return true end
+          end
+          return false
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          -- Two-line title, matching the "- X -" framing used elsewhere in
+          -- this file (e.g. SilphNetAbout's "- SILPHNET -"): the count on
+          -- the first line answers "how many people" before you even page
+          -- through, the current map on the second says where they are -
+          -- both real, useful context that a bare "NEARBY" didn't give.
+          -- No "- X -" framing on the map name line - every real map name
+          -- in FRIENDLY_MAP_NAMES fits in 16 chars on its own (longest are
+          -- CINNABAR ISLAND / VIRIDIAN FOREST at 15), but the dash framing
+          -- ("- " + " -" = 4 chars) would have pushed those over. The
+          -- title line keeps its dashes since "NEARBY (n)" is always
+          -- short. sub(1, 16) stays as a backstop in case a map id ever
+          -- falls through to the unmapped fallback (mapId with
+          -- underscores swapped for spaces) and comes out longer than
+          -- every name in the real table.
+          Font.draw("- NEARBY (" .. #nearby .. ") -", 16, 8)
+          Font.draw(friendlyMapName(myMap):sub(1, 16), 16, 16)
+          if #nearby == 0 then
+            Font.draw("NO ONE ELSE HERE", 16, 48)
+          else
+            local n = nearby[self.page]
+            Font.draw((self.page) .. "/" .. #nearby, 16, 40)
+            Font.draw((n.name or "?"):sub(1, 16), 16, 48)
+            Font.draw("ID   " .. (n.trainer_id or "-----"), 16, 56)
+            if isAlreadyFriend(n.account_id) then
+              Font.draw("ALREADY A FRIEND", 16, 72)
+            else
+              Font.draw("NOT YET A FRIEND", 16, 72)
+              Font.draw("ADD VIA DPAD RIGHT", 16, 80)
+              Font.draw("ON STATUS SCREEN", 16, 88)
+            end
+          end
+          if #nearby > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, 112) end
+          Font.draw("B:BACK", 16, 128)
         end
         return self
       end,
@@ -1289,6 +1423,20 @@ return function(mod)
           else
             mod.log:info("SilphNet: pending-requests fetch failed: %s", tostring(body))
           end
+        elseif tag == "online_count" then
+          onlineCountBusy = false
+          if status == "OK" and jsonIsOk(body) then
+            onlineCount = tonumber(jsonField(body, "online"))
+          else
+            mod.log:info("SilphNet: online-count fetch failed: %s", tostring(body))
+          end
+        elseif tag == "nearby" then
+          nearbyBusy = false
+          if status == "OK" and jsonIsOk(body) then
+            nearby = parseObjects(body)
+          else
+            mod.log:info("SilphNet: nearby fetch failed: %s", tostring(body))
+          end
         else
           handleHttpResult(tag, status, body)
         end
@@ -1313,6 +1461,8 @@ return function(mod)
       if not presenceBusy then firePresencePing() end
       if not friendsBusy then fireFriendsFetch() end
       if not pendingBusy then firePendingFetch() end
+      if not onlineCountBusy then fireOnlineCountFetch() end
+      if not nearbyBusy then fireNearbyFetch() end
     end
   end
 
@@ -1362,6 +1512,17 @@ return function(mod)
     pcall(function()
       mod.ui.insertBefore(items, "QUIT", { label = statusLabel(),
         onSelect = function() mod.ui.push(g, "SilphNetStatus") end })
+      -- A second, separate Start Menu row for Nearby - rather than
+      -- cramming every new feature into the one SILPHNET row (or bolting
+      -- a mode toggle onto the Friends screen, which is what an earlier
+      -- version of this did before it was simplified back out), each
+      -- major feature gets its own row as the mod grows. "SN" (not the
+      -- full "SILPHNET") keeps this within the same conservative label
+      -- length every other row here uses. Anchored on "QUIT" too, same
+      -- as the row above, so both SilphNet rows land together just above
+      -- it regardless of what other mods insert between them.
+      mod.ui.insertBefore(items, "QUIT", { label = "SN NEARBY",
+        onSelect = function() mod.ui.push(g, "SilphNetNearby") end })
     end)
     return nextFn(g, items)
   end)

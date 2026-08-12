@@ -21,3 +21,9 @@ __pycache__/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Real save file exports — contain a real player's name, trainer ID, and
+# party. research/gen1-save-format-findings.md documents what was learned
+# from one without needing the raw file itself.
+research/*.sav
+research/*.SAV
