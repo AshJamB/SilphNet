@@ -17,6 +17,9 @@ return {
       "Status screen controls swapped once logged in: A now opens the friends list (was START), START is now re-auth (was A's secondary job). Pre-login, A still retries login / confirms account creation exactly as before - only the post-login bindings changed.",
       "Start Menu labels shortened from \"SILPHNET\" to \"SN\" (e.g. \"SN ASHJAM\", \"SN NEARBY\", \"SN SET NAME/PASS\") - some third-party UI mods truncate long Start Menu rows by chopping off anything past a length limit rather than adding an ellipsis, so a longer label could disappear entirely depending on name length. The full-screen status title (\"- SILPHNET -\") is unchanged since that's a roomier context.",
     },
+    fixed = {
+      "Start Menu label could go stale: if login finished while the player was standing still at boot (before any world.stepped event drained the HTTP result), the \"SN ...\" row wouldn't update to \"SN <name>\" until something else happened to drain the result first - e.g. opening and leaving the status screen. The Start Menu hook now drains pending HTTP results itself before computing the label, so the very first menu open after a completed login already shows the right name.",
+    },
     known = {
       "Marker sprite is fixed to SPRITE_RED for now",
       "Multiple game-version tracking (Red/Blue/Yellow as separate characters under one account) is designed into the schema (presence keyed on account_id + game_version) but gameVersion in main.lua isn't wired up to the real ROM yet - defaults to UNKNOWN",

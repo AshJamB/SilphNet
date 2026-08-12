@@ -1517,6 +1517,21 @@ return function(mod)
 
   mod.hooks:wrap("ui.start_menu.items", function(nextFn, g, items)
     pcall(function()
+      -- Same class of bug documented above drainHttpResults(): a login
+      -- result can finish (HTTP_RESULT fully populated) while the player
+      -- is standing still at boot, sitting on the title/intro, or just
+      -- hasn't taken a world.stepped-triggering step yet - world.stepped
+      -- is the only thing that normally drains that channel. Without this,
+      -- the Start Menu opened THIS SESSION's first time can show a stale
+      -- "SN ..."/"SN SET NAME/PASS" label even though auth already
+      -- finished, and it wouldn't self-correct until something else (e.g.
+      -- opening the status screen, which drains it in its own update(dt))
+      -- happened to drain the channel first - reported on-device as the
+      -- label only ever updating after going into "SN ..." and backing
+      -- out. Draining here, right before statusLabel() is read, means the
+      -- very first Start Menu open after a completed login already shows
+      -- the correct name.
+      pcall(drainHttpResults)
       mod.ui.insertBefore(items, "QUIT", { label = statusLabel(),
         onSelect = function() mod.ui.push(g, "SilphNetStatus") end })
       -- A second, separate Start Menu row for Nearby - rather than
