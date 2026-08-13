@@ -18,6 +18,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Account - SilphNet</title>
+<link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="48x48" href="assets/favicon-48.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/favicon-180.png">
 <style>
   :root {
     --bg: #0b0e14;
@@ -84,8 +89,8 @@
     </p>
     <p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 16px; margin-bottom: 0;">
       Not sure of your name or password? Open the SilphNet page from the in-game Options menu -
-      it's shown there. Note that the game forces everything to UPPERCASE, so if you set your
-      password in-game, type it back in uppercase here too.
+      it's shown there. Note that the in-game keyboard defaults to UPPERCASE (though it can be
+      switched to lowercase there) - if you're not sure what case you used, try uppercase first.
     </p>
   </div>
 
@@ -384,7 +389,7 @@ el('changePassBtn').addEventListener('click', async () => {
     }
     el('currentPass').value = '';
     el('newPass').value = '';
-    el('changePassMsg').textContent = 'Password changed. Remember: the game forces uppercase, so use uppercase when you type it in-game.';
+    el('changePassMsg').textContent = "Password changed. Go into the mod's Options menu in-game and update MY NAME/PASSWORD to match, or you'll be prompted to create a new account instead of logging into this one.";
     el('changePassMsg').className = 'msg ok';
   } catch (e) {
     el('changePassMsg').textContent = 'Could not reach the server. Try again.';
@@ -466,7 +471,7 @@ el('resetBtn').addEventListener('click', async () => {
       return;
     }
     el('resetNewPass').value = '';
-    el('resetMsg').textContent = 'Password reset! Remember: the game forces uppercase, so use uppercase when you type it in-game. You can log in below.';
+    el('resetMsg').textContent = "Password reset! Go into the mod's Options menu in-game and update MY NAME/PASSWORD to match, or you'll be prompted to create a new account instead of logging into this one. You can log in below to keep managing your account.";
     el('resetMsg').className = 'msg ok';
     el('resetBtn').disabled = true;
   } catch (e) {

@@ -35,6 +35,11 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SilphNet - Multiplayer Presence Mod for Gen 1 Recomp</title>
 <meta name="description" content="A multiplayer presence mod for Pokemon Gen 1 Recomp. Log in, add friends by Trainer ID, and see their last-known positions - no server process required.">
+<link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="48x48" href="assets/favicon-48.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/favicon-180.png">
 <style>
   :root {
     --bg: #0b0e14;
