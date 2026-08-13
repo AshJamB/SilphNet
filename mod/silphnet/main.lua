@@ -507,7 +507,7 @@ return function(mod)
   -- onAuthOk did, made worse by every call site wrapping it in pcall(), so
   -- it would have failed completely silently with no error ever logged.
   local fireFriendsFetch, firePendingFetch, drainHttpResults, fireOnlineCountFetch, fireNearbyFetch
-  local fireFriendDetailFetch, fireStatsUpload
+  local fireFriendDetailFetch, fireStatsUpload, fireOnlineByVersionFetch
 
   local function onAuthOk(accId, name, token, trainerId)
     accountId, myName = accId, name or myName
@@ -615,6 +615,7 @@ return function(mod)
   local pendingBusy      = false
   local onlineCountBusy   = false
   local nearbyBusy         = false
+  local onlineByVersionBusy = false
   local statsUploadBusy     = false
   local sinceStats = 0            -- separate, slower cycle than PRESENCE_INTERVAL - see STATS_INTERVAL
   local STATS_INTERVAL = 180.0    -- 3 min - badges/dex/money/league wins don't need 30s freshness
@@ -813,6 +814,12 @@ return function(mod)
   -- PRESENCE_INTERVAL so standing still doesn't spam the server.
   local onlineCount = nil   -- nil until the first successful fetch
   local nearby = {}         -- array of { account_id, name, trainer_id }, current map only
+  -- array of { game_version, count, players = {...} }, always exactly
+  -- RED/BLUE/YELLOW in that order once fetched - see online_by_version.php.
+  -- nil until the first successful fetch (SilphNetOnline's own screen,
+  -- see below), same "nil means haven't heard back yet, distinct from an
+  -- empty/zero real answer" convention as onlineCount.
+  local onlineByVersion = nil
 
   local function firePresencePing()
     if authState ~= "authed" or not myMap then return end
@@ -849,6 +856,20 @@ return function(mod)
     if authState ~= "authed" or not myMap then return end
     nearbyBusy = true
     httpPost("nearby", "/nearby.php", { token = mod.save:get("token") or "", map_id = myMap })
+  end
+
+  -- On-demand only - fired once when SilphNetOnline opens, NOT on the 30s
+  -- presence cycle. Same reasoning as fireFriendDetailFetch below: this is
+  -- about a screen the player has chosen to look at right now, not
+  -- something every screen needs kept fresh in the background - unlike
+  -- onlineCount (the OLD flat global number, still used elsewhere), this
+  -- per-version breakdown with full player lists is more data than the
+  -- background cycle should be pulling down every ~30s regardless of
+  -- whether anyone's even looking at it.
+  fireOnlineByVersionFetch = function()
+    if authState ~= "authed" then return end
+    onlineByVersionBusy = true
+    httpGet("online_by_version", "/online_by_version.php", { token = mod.save:get("token") or "" })
   end
 
   -- On-demand only - fired once when SilphNetFriendDetail opens, NOT on
@@ -989,6 +1010,37 @@ return function(mod)
     if not y then return nil end
     local days = daysFromCivil(tonumber(y), tonumber(mo), tonumber(d))
     return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(se)
+  end
+
+  -- How many distinct FRIENDS (people, not friends[] entries - a friend
+  -- with two active saves shouldn't count twice) are currently ONLINE,
+  -- computed entirely client-side from the `friends` table this device
+  -- already has (no separate server round-trip) - same ONLINE definition
+  -- (OFFLINE_AFTER, 5 minutes) every other online/offline check in this
+  -- file already uses (refreshMarkers, SilphNetFriends' isOnline).
+  --
+  -- Added to replace online_count.php's GLOBAL count on the status
+  -- screen's A:FRIENDS hint - reported directly as confusing: a player
+  -- with zero friends online but who was themselves within the 5-minute
+  -- window would see "A:FRIENDS(1 ON)" (that global count includes the
+  -- caller) sitting right next to a friends list showing everyone
+  -- OFFLINE, easy to misread as "one of my friends is online". This
+  -- function answers the question that hint line is actually asking -
+  -- online_count.php's global count (which does still include the
+  -- caller - see that file) moved to its own separate "SN ONLINE" Start
+  -- Menu row instead, well away from anything friends-specific.
+  local function countFriendsOnline()
+    local seenPeople, n = {}, 0
+    for _, f in pairs(friends) do
+      if f.account_id and not seenPeople[f.account_id] then
+        local lastSeenUnix = parseMysqlDatetimeUtc(f.last_seen)
+        if lastSeenUnix and (os.time() - lastSeenUnix) <= OFFLINE_AFTER then
+          seenPeople[f.account_id] = true
+          n = n + 1
+        end
+      end
+    end
+    return n
   end
 
   -- Reconciles the friend-marker set against `friends` + the current map -
@@ -1240,18 +1292,32 @@ return function(mod)
             -- works fine unlabelled, so it's dropped rather than adding
             -- a line that wasn't there previously).
             --
-            -- The "(N ON)" suffix is now dropped ENTIRELY whenever there's
-            -- nobody online (onlineCount is 0) - per direct feedback, it
+            -- Now a FRIENDS-only online count (countFriendsOnline(),
+            -- computed client-side from the friends list this device
+            -- already has), NOT the global online_count.php figure this
+            -- used to show. Reported directly as confusing: the global
+            -- count includes the caller, so a player with zero friends
+            -- online but who was themselves within the 5-minute window
+            -- saw "A:FRIENDS(1 ON)" right next to a friends list showing
+            -- everyone OFFLINE - easy to misread as "one of my friends is
+            -- online" when it was actually always just them. This hint
+            -- line sits directly against the friends list, so it should
+            -- answer the friends-specific question; the global,
+            -- self-inclusive count still exists, just moved to its own
+            -- "SN ONLINE" Start Menu row instead (see below), away from
+            -- anything friends-related.
+            --
+            -- The "(N ON)" suffix is still dropped ENTIRELY whenever
+            -- nobody relevant is online (this count is 0) - per the
+            -- original direct feedback this behavior was built for, it
             -- used to always show something here (even "(- ON)" before
             -- the first fetch landed, or "(0 ON)" once it landed with
             -- nobody online), which read as a placeholder rather than a
-            -- real "someone's online" indicator. Now it only appears once
-            -- there's an actual positive count to report - "A:FRIENDS"
-            -- alone otherwise, exactly the same as if this feature never
-            -- existed. Still no space after the colon when it IS shown
-            -- ("FRIENDS(" not "FRIENDS (") to keep this at 16 chars even
-            -- at a double-digit online count.
-            local suffix = (onlineCount and onlineCount > 0) and ("(" .. tostring(onlineCount) .. " ON)") or ""
+            -- real "someone's online" indicator. Still no space after the
+            -- colon when it IS shown ("FRIENDS(" not "FRIENDS (") to keep
+            -- this at 16 chars even at a double-digit count.
+            local friendsOnlineCount = countFriendsOnline()
+            local suffix = (friendsOnlineCount > 0) and ("(" .. tostring(friendsOnlineCount) .. " ON)") or ""
             Font.draw(("A:FRIENDS" .. suffix):sub(1, 16), 16, 96)
             Font.draw("DPAD R:ADD L:REQ", 16, 104)
           end
@@ -1850,7 +1916,14 @@ return function(mod)
               Font.draw("ALREADY A FRIEND", 16, 72)
             else
               Font.draw("NOT YET A FRIEND", 16, 72)
-              Font.draw("ADD VIA DPAD RIGHT", 16, 80)
+              -- Was "ADD VIA DPAD RIGHT" (18 chars) / "ON STATUS SCREEN"
+              -- (16 chars) - the first line silently overflowed this
+              -- project's real 16-char/line budget, undetected until a
+              -- byte-for-byte length check while building the SN ONLINE
+              -- screen (which was about to inherit the exact same text)
+              -- caught it. "RIGHT:ADD FRIEND" fits exactly at 16 and
+              -- reads as a real instruction, not just truncated further.
+              Font.draw("RIGHT:ADD FRIEND", 16, 80)
               Font.draw("ON STATUS SCREEN", 16, 88)
             end
           end
@@ -2210,6 +2283,47 @@ return function(mod)
             friendDetailState = "failed"
             mod.log:info("SilphNet: friend detail fetch failed: %s", tostring(body))
           end
+        elseif tag == "online_by_version" then
+          onlineByVersionBusy = false
+          if status == "OK" and jsonIsOk(body) then
+            -- online_by_version.php returns {"versions":[{"game_version",
+            -- "count", "players":[{...}, ...]}, ...]} - each entry's OWN
+            -- "players" is a flat array of flat records (account_id/name/
+            -- trainer_id, no further nesting), so unlike friend_detail's
+            -- stats/activity sub-objects, parseObjects (already handles
+            -- "scan the first [...] in a string") can be reused directly
+            -- on each entry's substring rather than needing a bespoke
+            -- nested-array walker - unlike friend_detail's per-entry
+            -- nested OBJECTS (stats/activity), this is a per-entry nested
+            -- ARRAY, which parseObjects already covers on its own once
+            -- handed just that entry's text.
+            local versionsArrayBody = string.match(body, '"versions"%s*:%s*%[(.-)%]%s*}%s*$')
+            local out = {}
+            if versionsArrayBody then
+              local depth, entryStart = 0, nil
+              for i = 1, #versionsArrayBody do
+                local c = versionsArrayBody:sub(i, i)
+                if c == "{" then
+                  if depth == 0 then entryStart = i end
+                  depth = depth + 1
+                elseif c == "}" then
+                  depth = depth - 1
+                  if depth == 0 and entryStart then
+                    local entry = versionsArrayBody:sub(entryStart, i)
+                    local gv = string.match(entry, '"game_version"%s*:%s*"([^"]*)"')
+                    local count = tonumber(string.match(entry, '"count"%s*:%s*(%d+)')) or 0
+                    if gv then
+                      out[#out + 1] = { game_version = gv, count = count, players = parseObjects(entry) }
+                    end
+                    entryStart = nil
+                  end
+                end
+              end
+            end
+            onlineByVersion = out
+          else
+            mod.log:info("SilphNet: online-by-version fetch failed: %s", tostring(body))
+          end
         else
           handleHttpResult(tag, status, body)
         end
@@ -2359,6 +2473,28 @@ return function(mod)
       -- its own Start Menu row - the exact same site the two rows above
       -- already use successfully - sidesteps that entirely rather than
       -- trying to debug the options screen's own push handling.
+      -- Global (self-inclusive) online-players row - moved here from the
+      -- status screen's A:FRIENDS hint line, which now shows a
+      -- friends-only count instead (see countFriendsOnline()).
+      -- Deliberately its own separate row, not folded onto any of the
+      -- two above - the whole reason this moved at all was that the
+      -- friends-list-adjacent hint line was easy to misread as a
+      -- friends-online count when it was really global and
+      -- self-inclusive, so this stays on a screen that has nothing to do
+      -- with friends at all.
+      --
+      -- Inserted BEFORE "SN ABOUT" (i.e. this call runs before that
+      -- one), not after - each insertBefore(items, "QUIT", ...) call
+      -- lands its row immediately above QUIT, pushing any row inserted
+      -- by an EARLIER call further up the list (see the comment above
+      -- the SN NEARBY insert: "both SilphNet rows land together just
+      -- above it" - later calls end up closer to QUIT/the bottom, not
+      -- further from it). Ordering these calls ONLINE-then-ABOUT (rather
+      -- than the reverse) is what keeps About pinned as the last
+      -- SilphNet row, per direct request ("About should always be the
+      -- bottom menu item").
+      mod.ui.insertBefore(items, "QUIT", { label = "SN ONLINE",
+        onSelect = function() mod.ui.push(g, "SilphNetOnline") end })
       mod.ui.insertBefore(items, "QUIT", { label = "SN ABOUT",
         onSelect = function() mod.ui.push(g, "SilphNetAbout") end })
     end)
@@ -2415,6 +2551,164 @@ return function(mod)
           -- long real-world input, not its own version string growing.
           Font.draw("THANKS FOR", 16, 112)
           Font.draw(("PLAYING! V" .. tostring(mod.version or "?")):sub(1, 16), 16, 120)
+          Font.draw("B:BACK", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Global (self-inclusive) online-players screen, pushed from the "SN
+  -- ONLINE" Start Menu row - see that row's comment for why this moved
+  -- off the status screen's A:FRIENDS hint (that hint is now
+  -- friends-only, via countFriendsOnline()).
+  --
+  -- Two independent paging axes, per direct request ("split this into
+  -- categories... navigate left and right to more pages... then the
+  -- option to add the players like the NEARBY screen"):
+  --   * self.verPage: 0 = summary (RED/BLUE/YELLOW counts together),
+  --     1/2/3 = that version's own page. LEFT/RIGHT cycles this axis,
+  --     wrapping 0->1->2->3->0.
+  --   * self.playerIndex: which player (1-based) is showing WITHIN the
+  --     current version's page - UP/DOWN cycles this axis, independent
+  --     of LEFT/RIGHT, same "two axes on one screen" convention the
+  --     friend detail screen's PARTY page already established (A cycles
+  --     STATS/PARTY/ACTIVITY, LEFT/RIGHT pages within PARTY specifically).
+  --
+  -- Uses online_by_version.php (full per-version player lists), NOT
+  -- online_count.php (a single flat number, still used elsewhere e.g.
+  -- if ever needed again) - this screen needs the actual player list per
+  -- version to support the add-friend flow, which a bare count can't
+  -- provide.
+  pcall(function()
+    mod.content.screens:register("SilphNetOnline", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true, verPage = 0, playerIndex = 1 }
+        -- Fires once, right when the screen opens - same "fetch on
+        -- demand when a screen wants fresher data than the background
+        -- cycle already provides" pattern SilphNetFriendDetail already
+        -- uses for friend_detail. onlineByVersion is NOT on the
+        -- background ~30s cycle (see fireOnlineByVersionFetch's own
+        -- comment), so without this the screen would show "CHECKING..."
+        -- forever until something else happened to trigger a fetch.
+        if not onlineByVersionBusy then fireOnlineByVersionFetch() end
+        -- A friend's own account_id may appear on more than one
+        -- friends[] entry (several active saves) - checked by account_id
+        -- alone, same helper SilphNetNearby already defines for the
+        -- identical purpose (kept as its own local copy here rather than
+        -- hoisted into a shared upvalue, since neither screen needs the
+        -- other's).
+        local function isAlreadyFriend(accountId)
+          if not accountId then return false end
+          for _, f in pairs(friends) do
+            if f.account_id == accountId then return true end
+          end
+          return false
+        end
+        function self:update(dt)
+          pcall(drainHttpResults)
+          local input = g.input
+          if input:wasPressed("right") then
+            self.verPage = (self.verPage + 1) % 4
+            self.playerIndex = 1
+          elseif input:wasPressed("left") then
+            self.verPage = (self.verPage - 1) % 4
+            self.playerIndex = 1
+          end
+          if self.verPage > 0 and onlineByVersion then
+            local v = onlineByVersion[self.verPage]
+            local n = v and #v.players or 0
+            if n > 0 then
+              if input:wasPressed("down") then
+                self.playerIndex = (self.playerIndex % n) + 1
+              elseif input:wasPressed("up") then
+                self.playerIndex = self.playerIndex - 1
+                if self.playerIndex < 1 then self.playerIndex = n end
+              end
+            end
+          end
+          if input:wasPressed("b") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          if onlineByVersion == nil then
+            -- Same "nil means haven't heard back yet" convention as
+            -- onlineCount/friendDetail/etc elsewhere in this file -
+            -- distinct from a genuine zero-everywhere answer.
+            Font.draw("- ONLINE -", 16, 8)
+            Font.draw("CHECKING...", 16, 72)
+          elseif self.verPage == 0 then
+            -- Summary page: all three versions' counts together, per
+            -- direct request ("total amount of people online... RED: 4
+            -- ONLINE / BLUE: 3 ONLINE / YELLOW: 1 ONLINE"). Labels
+            -- right-padded to align the counts in a column, same
+            -- left-label/right-value convention used elsewhere in this
+            -- file (BADGES/SEEN/CAUGHT etc. on the STATS page) - YELLOW
+            -- (6 chars) is the longest label, so RED/BLUE pad out to
+            -- match it.
+            Font.draw("- ONLINE -", 16, 8)
+            for i, v in ipairs(onlineByVersion) do
+              local label = v.game_version
+              label = label .. string.rep(" ", 6 - #label)
+              Font.draw((label .. " " .. v.count .. " ON"):sub(1, 16), 16, 40 + (i - 1) * 16)
+            end
+            if #onlineByVersion > 0 then Font.draw("LR:VERSION", 16, 120) end
+            Font.draw("B:BACK", 16, 128)
+            return
+          else
+            -- Per-version page: title is "<VERSION> ONLINE" (e.g. "RED
+            -- ONLINE"), mirroring SilphNetNearby's list-one-per-screen
+            -- layout and add-friend flow almost exactly - the same
+            -- underlying question ("is this person already my friend")
+            -- answered the same way, just scoped to a game version
+            -- instead of a map.
+            local v = onlineByVersion[self.verPage]
+            local title = (v.game_version .. " ONLINE"):sub(1, 16)
+            Font.draw(title, 16, 8)
+            -- Checked against #v.players (the actual array length),
+            -- NOT v.count - v.count is a server-reported convenience
+            -- field that SHOULD always match #v.players, but indexing
+            -- v.players[self.playerIndex] off a mismatched v.count
+            -- instead of the real array length risks a nil index if
+            -- they're ever out of sync (e.g. a partial/malformed
+            -- response) - the array's own length is the one thing that
+            -- can never lie about how many real entries are there to
+            -- read. self.playerIndex is also re-clamped here defensively
+            -- (not just relying on update()'s own wrap-around logic
+            -- always running before draw() first does).
+            local n = #v.players
+            if self.playerIndex > n then self.playerIndex = 1 end
+            if n == 0 then
+              Font.draw("NONE ONLINE", 16, 40)
+            else
+              local p = v.players[self.playerIndex]
+              Font.draw((self.playerIndex) .. "/" .. n, 16, 24)
+              Font.draw((p.name or "?"):sub(1, 16), 16, 48)
+              Font.draw("ID   " .. (p.trainer_id or "-----"), 16, 56)
+              if isAlreadyFriend(p.account_id) then
+                Font.draw("ALREADY A FRIEND", 16, 72)
+              else
+                Font.draw("NOT YET A FRIEND", 16, 72)
+                Font.draw("RIGHT:ADD FRIEND", 16, 80)
+                Font.draw("ON STATUS SCREEN", 16, 88)
+              end
+            end
+          end
+          if onlineByVersion and self.verPage > 0 then
+            local v = onlineByVersion[self.verPage]
+            -- Both hints combined onto one line when there's more than
+            -- one player to page between (LR for version, UD for
+            -- player) - separate lines only when UD:PAGE wouldn't mean
+            -- anything (0 or 1 player on this version's page), same
+            -- "don't advertise a control that does nothing right now"
+            -- rule SilphNetNearby's own LEFT/RIGHT:PAGE hint follows.
+            if v and #v.players > 1 then
+              Font.draw("LR:VER UD:PAGE", 16, 112)
+            else
+              Font.draw("LR:VERSION", 16, 112)
+            end
+          end
           Font.draw("B:BACK", 16, 128)
         end
         return self

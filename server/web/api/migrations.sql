@@ -152,3 +152,33 @@ ALTER TABLE friend_stats ADD COLUMN play_seconds INT UNSIGNED NOT NULL DEFAULT 0
 -- against.
 ALTER TABLE friend_stats ADD COLUMN party VARCHAR(512) NOT NULL DEFAULT '' AFTER play_seconds;
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-13: presence.name removed (dead column, not a new one)
+-- presence.name was a denormalized copy of the display name, written on
+-- every ping.php call but never actually READ back by any endpoint -
+-- friends.php/nearby.php/online_by_version.php/friend_detail.php all
+-- join to accounts.name fresh instead. Harmless as-is (self-corrected
+-- within one ping after a rename, since ping.php overwrote it every
+-- ~30s regardless), but it was the one column that could have looked
+-- like a real "stale name after rename" bug to anyone reading this
+-- schema without checking whether it was actually used - removed while
+-- building update_account.php's rename feature specifically to close
+-- off that question for good. If you're setting up SilphNet fresh,
+-- schema.sql no longer creates this column at all and you can skip this
+-- block entirely.
+-- ---------------------------------------------------------------------------
+
+-- Step 1: check if the column still exists before running step 2 - if
+-- this returns NO rows, it's already gone (or you're on a fresh
+-- install) and you can skip the rest of this block.
+--
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema = DATABASE() AND table_name = 'presence' AND column_name = 'name';
+
+-- Step 2: drop it. Safe to run even while players are actively pinging -
+-- ping.php's own INSERT no longer references this column at all (see
+-- that file), so there's no window where a live request could fail
+-- because the column vanished mid-use.
+ALTER TABLE presence DROP COLUMN name;
+-- ---------------------------------------------------------------------------

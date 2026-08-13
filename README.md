@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.7.1 - About Silphnet moved to its own Start Menu row.**
+**Status: v1.8.0 - SN ONLINE shows who's online per game version.**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
@@ -59,9 +59,14 @@ server/
     schema.sql            run once in phpMyAdmin to create the tables
     migrations.sql         column changes for an existing database (run only when a new version needs one)
     db.php.example         DB connection template - copy to db.php and fill in real credentials there
+    index.php               public landing page (features, install steps, GitHub link, socials)
+    account.php             log in on the web to change your username or Trainer ID
     register.php           create an account (name + password -> account_id + token)
     login.php              log in with name + password -> account_id + token
     login_token.php         re-authenticate with a cached token (no retyping)
+    check_name.php           live availability check for a candidate username (account.php)
+    check_trainer_id.php     live availability check for a candidate Trainer ID (account.php)
+    update_account.php       rename your username and/or reassign your Trainer ID (password-gated)
     ping.php                report a last-known position (requires a token)
     friends.php             fetch friends' last-known positions (requires a token)
     add_friend.php           send a friend request by Trainer ID
@@ -69,6 +74,7 @@ server/
     remove_friend.php        remove an accepted friend (or decline/cancel a pending request)
     pending_requests.php     list incoming friend requests awaiting your accept
     online_count.php         count of everyone currently online, globally (not just friends)
+    online_by_version.php    everyone online, grouped by game version (RED/BLUE/YELLOW), with player lists
     nearby.php               everyone else (friend or not) currently on a given map
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
@@ -133,13 +139,13 @@ depending on name length. Select that row for the status screen:
   before you're logged in.
 - **Once logged in**: **A** opens the friends list (name, online/offline,
   last-known map and tile, how long ago). The **A:FRIENDS** hint itself
-  also shows the global online count when there IS anyone online
-  (`A:FRIENDS(2 ON)`) - dropped entirely when nobody's online, rather than
-  showing a placeholder like `(0 ON)` or `(- ON)`. **START** is now
-  re-auth (forces a fresh login check) - swapped from the original layout
-  since A feels more natural as the "open/select" button, matching how A
-  is used everywhere else in this mod (accepting a request, confirming a
-  removal).
+  also shows how many of YOUR FRIENDS are currently online, when there
+  IS at least one (`A:FRIENDS(2 ON)`) - dropped entirely when none of
+  your friends are online, rather than showing a placeholder like
+  `(0 ON)` or `(- ON)`. **START** is now re-auth (forces a fresh login
+  check) - swapped from the original layout since A feels more natural
+  as the "open/select" button, matching how A is used everywhere else in
+  this mod (accepting a request, confirming a removal).
 A second Start Menu row, **SN NEARBY**, sits right below the main
 **SN \<name\>** row (rather than being folded into the friends
 list) and opens its own screen: everyone else currently on your own
@@ -150,6 +156,30 @@ of an add prompt; anyone else shows **NOT YET A FRIEND** with a
 reminder to add them the normal way (**RIGHT** from the status screen,
 entering their shown Trainer ID) - there's no separate "add" button on
 the NEARBY screen itself, to avoid building the same flow twice.
+A fourth Start Menu row, **SN ONLINE**, shows everyone currently online
+across the whole service, not just your friends (self included). This
+used to be folded into the **A:FRIENDS** hint above as a single flat
+number, but that read as confusing: a player with no friends online, who
+was themselves within the 5-minute ONLINE window, would see
+`A:FRIENDS(1 ON)` right next to a friends list showing everyone OFFLINE -
+technically correct (that count always included the player), but easy to
+misread as "one of my friends is online." Splitting these into two
+clearly separate numbers, on two separate screens, means neither can be
+mistaken for the other again.
+
+**SN ONLINE** itself has two pages: a summary (`RED n ON` / `BLUE n ON` /
+`YELLOW n ON`, one line per game version), and - **LEFT/RIGHT** from
+there - each version's own page listing exactly who's online in it, one
+person per screen (**UP/DOWN** pages between them), with the same
+**ALREADY A FRIEND** / **NOT YET A FRIEND** + add-by-Trainer-ID flow
+**SN NEARBY** already uses. UNKNOWN-version presence rows (an account
+whose client hasn't reported a real game.save.version yet) never appear
+here - see "There's deliberately no..." further down for why this
+mod can tell RED/BLUE/YELLOW apart at all.
+
+A fifth Start Menu row, **SN ABOUT** (credits and links), always sits
+last, directly above **QUIT** - a deliberate, permanent position as the
+mod grows new rows over time, not just wherever it happened to land.
 - **RIGHT** - open Add Friend (enter a Trainer ID with a digit spinner:
   **UP/DOWN** changes the selected digit, **LEFT/RIGHT** moves the cursor,
   **A** sends the request)
@@ -443,19 +473,22 @@ the actual documented mod API (`Reference-Events`, `Reference-Hooks`,
     `pokemon.evolved` are real, documented, and not yet wired up either
     - both would slot into the same activity-upload path stats.php
     already supports, whenever this is picked up.
-13. **Account webpage** - change username/password and, notably, your
-    Trainer ID. Needs to answer: what happens to an already-logged-in
-    device when its Trainer ID changes server-side mid-session? Today
-    the mod only reads its own Trainer ID once, right after
-    login/register - it's cached in `myTrainerId` and never re-fetched.
-    So without extra work, a changed ID would only take effect after
-    that device's cached token is invalidated and it logs in again (the
-    same path MY NAME/PASSWORD changes already use - see
-    `mod.options_changed` in `main.lua`) - no full game restart needed,
-    but a fresh login is. If instant in-session updates matter, the
-    presence-poll cycle could also carry back "your ID changed" and
-    force a silent re-auth automatically; otherwise this is a documented
-    limitation ("changes take effect next login") rather than a bug.
+13. **Done - account webpage** (`account.php`) - log in with your name and
+    password (same credentials the mod uses) to change your username
+    and/or Trainer ID, with live availability checking as you type
+    (`check_name.php`/`check_trainer_id.php`) and a real password
+    re-check at save time (`update_account.php`) - not just a valid
+    session token, the actual password, since this changes
+    identity-bearing account fields. Both uniqueness re-checks and the
+    write happen inside one transaction, so two people can't both be
+    told a name/ID is free and only one actually end up with it.
+    Password itself isn't changeable from this page yet (only name and
+    Trainer ID) - a natural follow-up, not built this round.
+    As anticipated: a changed Trainer ID only takes effect the next time
+    that device logs in (the mod still only reads its Trainer ID once,
+    right after login/register, cached in `myTrainerId` and never
+    re-fetched mid-session) - the save confirmation on `account.php`
+    says this explicitly rather than implying an instant update.
 14. **Leaderboards.** Cheapest/safest options rank on data the server
     already has or can easily start recording: most accepted friends,
     longest current login streak (consecutive days pinged), most maps
@@ -535,11 +568,14 @@ and no persistent process required, ordinary shared web hosting is enough:
 
 1. In phpMyAdmin, run `server/web/schema.sql` against the database to
    create the `accounts`, `sessions`, `presence`, and `friends` tables.
-2. Upload everything in `server/web/` to the site (e.g. `yoursite.com/api/`),
-   except `db.php.example` - copy that one to `db.php` first and fill in
-   the real database credentials there before uploading it.
+2. Upload everything in `server/web/` (including the `assets/` folder) to
+   the site root, except `db.php.example` - copy that one to `db.php`
+   first and fill in the real database credentials there before
+   uploading it. `index.php` becomes the site's homepage automatically
+   (most hosts serve `index.php` at the root by default); `account.php`
+   is reachable at `yoursite.com/account.php`.
 3. In `mod/silphnet/main.lua`, change `API_BASE` at the top to point at
-   the new site's `/api` URL, then rebuild `dist/silphnet.zip`.
+   the new site's URL, then rebuild `dist/silphnet.zip`.
 
 If a database column needs adding later (e.g. after pulling in a newer
 version of this mod), see `server/web/migrations.sql`.

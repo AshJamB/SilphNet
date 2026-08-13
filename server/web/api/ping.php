@@ -80,15 +80,26 @@ try {
         }
     }
 
+    // No "name" column here (removed - see migrations.sql's 2026-08-13
+    // dated entry) - presence.name was a denormalized copy of the
+    // display name, written on every ping but never actually READ back
+    // by any endpoint (friends.php/nearby.php/online_by_version.php/
+    // friend_detail.php all join to accounts.name fresh instead). Left
+    // in place it was harmless (self-corrected within one ping after a
+    // rename) but genuinely dead weight, and the one column that could
+    // have looked like a "stale name after rename" bug to anyone
+    // reading this schema later without checking whether it was
+    // actually used - removed while building update_account.php's
+    // rename feature specifically to close off that question for good.
     $stmt = $pdo->prepare(
-        'INSERT INTO presence (account_id, game_version, name, map_id, x, y, facing, last_seen)
-         VALUES (:account_id, :version, :name, :map_id, :x, :y, :facing, NOW())
+        'INSERT INTO presence (account_id, game_version, map_id, x, y, facing, last_seen)
+         VALUES (:account_id, :version, :map_id, :x, :y, :facing, NOW())
          ON DUPLICATE KEY UPDATE
-           name = VALUES(name), map_id = VALUES(map_id), x = VALUES(x), y = VALUES(y),
+           map_id = VALUES(map_id), x = VALUES(x), y = VALUES(y),
            facing = VALUES(facing), last_seen = NOW()'
     );
     $stmt->execute([
-        ':account_id' => $account['account_id'], ':version' => $version, ':name' => $account['name'],
+        ':account_id' => $account['account_id'], ':version' => $version,
         ':map_id' => $mapId, ':x' => (int)$x, ':y' => (int)$y, ':facing' => $facing,
     ]);
     silphnet_json(['ok' => true]);

@@ -35,11 +35,17 @@ CREATE TABLE IF NOT EXISTS sessions (
   INDEX idx_last_used (last_used)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- No "name" column - a fresh setup never gets the denormalized
+-- presence.name column an earlier version of this schema had (it was
+-- written on every ping but never actually read back by any endpoint;
+-- every real name display joins to accounts.name fresh instead - see
+-- migrations.sql's 2026-08-13 dated entry for the removal on an
+-- EXISTING database, and ping.php's INSERT for why it's gone from
+-- there too).
 CREATE TABLE IF NOT EXISTS presence (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   account_id   VARCHAR(16) NOT NULL,
   game_version VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN', -- RED | BLUE | YELLOW | GOLD | UNKNOWN
-  name         VARCHAR(16) NOT NULL,
   map_id       VARCHAR(64) NOT NULL,
   x            INT NOT NULL,
   y            INT NOT NULL,
