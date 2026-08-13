@@ -71,3 +71,41 @@ ALTER TABLE sessions ADD INDEX idx_last_used (last_used);
 -- cutoff (auth.php enforces this going forward on every login_token.php
 -- call - this step just clears out any backlog from before that existed).
 DELETE FROM sessions WHERE last_used < NOW() - INTERVAL 90 DAY;
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-13: friend_stats + friend_activity (new tables, not a column
+-- migration) - just re-run schema.sql, its CREATE TABLE IF NOT EXISTS
+-- statements will add these two new tables without touching anything you
+-- already have. Nothing to ALTER here - listed in this file only so it's
+-- not missed by anyone skimming straight to migrations.sql for "what do I
+-- need to run for this version."
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-14: UNKNOWN game_version rows - NO SQL TO RUN, self-healing.
+-- Before this version, gameVersion in main.lua was a permanent "UNKNOWN"
+-- placeholder (never actually wired up to the engine), so every existing
+-- presence/friend_stats/friend_activity row is currently keyed UNKNOWN.
+-- game_version is PART OF THE PRIMARY KEY on all three tables, so once
+-- clients start sending a real version (RED/BLUE/YELLOW), a naive upsert
+-- can't just overwrite the old UNKNOWN row in place - it would insert a
+-- SECOND row under the new key instead, leaving the old UNKNOWN row
+-- behind as permanent dead data.
+--
+-- Fixed in ping.php itself, not here: every ping now re-keys an existing
+-- UNKNOWN row (on all three tables) onto the real version the moment
+-- it's known, PROVIDED no row already exists under that real version for
+-- the same account - see the comment block above ping.php's INSERT for
+-- the exact logic and why that guard is needed. This runs automatically,
+-- once per account, the first time each player's updated client pings -
+-- no manual SQL, no need to guess which UNKNOWN rows are stale (already
+-- updated) versus genuinely current (mod not updated yet), since the
+-- server can't tell those apart from a one-off migration but CAN handle
+-- it correctly live, one real ping at a time, as each player updates.
+--
+-- If you want to check progress: `SELECT COUNT(*) FROM presence WHERE
+-- game_version = 'UNKNOWN';` - this number should fall towards zero (not
+-- necessarily reach it - a few real edge cases, like a save the engine
+-- itself can't identify, may legitimately stay UNKNOWN) as more players
+-- update and play at least once.
+-- ---------------------------------------------------------------------------

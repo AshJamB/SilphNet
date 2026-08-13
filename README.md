@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.4.4 - async presence and friends, added in-game.** Log in with
+**Status: v1.6.2 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -168,14 +168,51 @@ ground.
 
 The friends list shows one friend per screen, not a scrolling list - the
 "N/M" counter at the top (e.g. "1/3") means "friend 1 of 3 total," and
-**LEFT/RIGHT** or **A** switches which one is shown. Page
-through (**START** from the status screen), **SELECT** opens a confirm
-screen to remove the friend currently on screen (**A** confirms, **B**
-cancels) - it removes the friendship for both sides, not just locally, and
-the screen waits for the server to fully confirm the removal AND for the
-friends list to actually refresh (showing "REMOVING..." throughout) before
-returning to the list, rather than popping back while still showing the
-just-removed friend.
+**LEFT/RIGHT** switches which one is shown. While a friend entry is
+ONLINE, that counter also shows which version they're playing right now
+("1/3 (BLUE)") - offline, no version is shown at all, regardless of how
+many versions that friend has. **A** opens that friend's detail screen
+(see below); **SELECT** opens a confirm screen to remove the friend
+currently on screen (**A** confirms, **B** cancels) - it removes the
+friendship for both sides, not just locally, and the screen waits for the
+server to fully confirm the removal AND for the friends list to actually
+refresh (showing "REMOVING..." throughout) before returning to the list,
+rather than popping back while still showing the just-removed friend.
+
+**Friend detail screen** (**A** on a friend in the list): **A** cycles
+through every page in one flat loop - that friend's STATS, then their
+ACTIVITY, then (only if they've genuinely played more than one game
+version with real data) the next version's STATS, then ACTIVITY, and so
+on, wrapping back to the start. **B** backs out at any point. A version
+only gets a slot in this cycle if that friend has actually uploaded
+stats or activity for it - a version they're merely pinging presence
+under (e.g. just started a fresh file) doesn't show up until they've
+actually reported something. The game version is shown on its own line
+right under the page title (e.g. "ARCHADA STATS" / "BLUE"), for every
+friend, not just ones with multiple versions - it's just part of reading
+the page now, not a conditional hint.
+
+- **STATS pages**: badges (out of 8), Pokédex seen/caught, League wins,
+  and money - all self-reported by that friend's own client, since a mod
+  can only ever read its own save data, never someone else's. Shows "NO
+  STATS YET" if they haven't uploaded a snapshot for that version yet.
+- **ACTIVITY pages**: that version's latest status message on two lines -
+  e.g. "CAUGHT LVL 25" / "BLASTOISE" - with its own time-ago, plus that
+  friend's overall last-known map and time-ago (their single most recent
+  ping across ALL their versions, not scoped to just this one) repeated
+  from the main friends list. Two lines, not one, since a long species
+  name plus the level prefix risked overflowing a single 16-char line.
+  These are deliberately two separate timestamps, not one shared "X AGO" -
+  catching something and being last seen online are different moments (a
+  friend could catch something and then go offline, or still be walking
+  around minutes later).
+
+Activity is driven by the real, documented `pokemon.caught` event (not a
+poll) - fires the moment a catch happens and uploads immediately,
+independent of the slower stats cycle. Level comes from that event's own
+`mon` field. Stats themselves (badges/Pokédex counts/money/League wins)
+upload roughly every 3 minutes of play instead - slower than the ~30s
+presence cycle, since none of those need to be that fresh.
 
 ### 4. Play
 
@@ -351,6 +388,9 @@ at it.
 8. Done - global online counter (folded onto the status screen's FRIENDS line, "FRIENDSn ONn")
 9. Done - "who's nearby" (non-friends) - its own Start Menu row ("SN NEARBY") and screen, showing everyone else's name/Trainer ID on your current map, friend or not
 10. Done - status screen controls swapped once logged in: A opens the friends list, START is re-auth (was the other way round)
+11. Done - friend detail screen (press A on a friend in the friends list): self-reported stats (badges, Pokédex seen/caught, League wins, money) plus latest activity - currently catches only, shown on two lines ("CAUGHT LVL 25" / "BLASTOISE") - with its own time-ago, and last-seen repeated from the main friends list
+12. Done (partial) - auto status updates: driven by the real `pokemon.caught` event (not a poll), including level from the event's own payload, uploaded immediately independent of the slower ~3 min stats cycle. Trainer-battle events ("DFTD BUG CATCHER" etc.) are NOT wired up - see the corrected note on item 12 below, this was originally overstated as straightforwardly buildable and isn't. Level-up/badge-earned/League-win also aren't wired up yet.
+13. Done - real game version detection: `game.save.version` (confirmed directly from the engine's own `SaveData.lua`) replaces the permanent "UNKNOWN" placeholder that had sat unverified for most of this project. A friend who's genuinely played more than one version (e.g. cleared a BLUE run, then started a fresh YELLOW one) shows a version tag on the friends list ("1/3 (BLUE)") and can be viewed per-version on the friend detail screen (**SELECT** cycles versions there) - both only appear once a friend actually has more than one to disambiguate.
 
 ### Next up
 
@@ -366,18 +406,35 @@ the actual documented mod API (`Reference-Events`, `Reference-Hooks`,
    deliberately different look (different sprite, or a `[!]`/`[?]`-style
    marker rather than a plain statue) and careful placement so it never
    sits in a trainer's path or blocks a walkway - existing gym layouts
-   need checking map-by-map before placement. Data source: same
-   `pokemon.caught`-style event family, specifically detecting an
-   Elite-Four-class trainer win via `battle.ended`/`world.trainer_engaged`,
-   reported to the server per-gym the same way presence already reports
-   per-map.
-12. **Auto status updates** ("Just caught a level 38 EKANS", "Just beat
-    Bug Catcher"). Fully supported by real, documented events:
-    `pokemon.caught { mon, species, isNew, ball, ... }`,
-    `battle.ended { battle, result }`, `pokemon.evolved`,
-    `pokemon.level_up`. The mod listens for these and posts a short
-    status string to the server on the next presence cycle; friends see
-    it next to that friend's entry until it's superseded by a newer one.
+   need checking map-by-map before placement. Data source: see the
+   corrected note under item 12 below on trainer-battle detection - the
+   gym-leader-specific case has the exact same "no single event gives
+   both identity and outcome" problem as a general "DFTD BUG CATCHER"
+   message would.
+12. **Auto status updates - catches: Done (see Shipped, item 12 above).**
+    Driven by the real `pokemon.caught` event
+    (`{ battle, mon, species, isNew, ball, destination, game }`), with
+    level read off the event's own `mon` field.
+
+    **Trainer-beaten messages ("DFTD BUG CATCHER", "DFTD CHAMPION", "DFTD
+    RIVAL") - corrected, NOT straightforwardly buildable.** An earlier
+    version of this note claimed `battle.ended` carried enough for this;
+    checked against the real Reference-Events wiki page and that's
+    wrong. `battle.ended`'s real payload is just `{ battle, result }`
+    (`result` is `"caught"`/`"run"`/`"skipped"`/etc, not a trainer
+    win/loss flag) - no trainer identity at all. `world.trainer_engaged`
+    (`{ npc, trainerClass, partyIndex }`) has the trainer's class, but
+    fires at the START of the fight, before any outcome is known. So
+    this would need the mod to remember `trainerClass` from
+    `world.trainer_engaged` and match it up with whatever `battle.ended`
+    fires shortly after - not a single clean event, and not yet tested
+    for whether `battle.ended`'s `result` values even distinguish
+    "beat a trainer" from "lost" or "ran".
+
+    `pokemon.level_up` (`{ mon, level, prevLevel, learnable }`) and
+    `pokemon.evolved` are real, documented, and not yet wired up either
+    - both would slot into the same activity-upload path stats.php
+    already supports, whenever this is picked up.
 13. **Account webpage** - change username/password and, notably, your
     Trainer ID. Needs to answer: what happens to an already-logged-in
     device when its Trainer ID changes server-side mid-session? Today
@@ -426,9 +483,14 @@ Confirmed, from the engine's own working code:
   should work for `game.save.party` etc., no special event needed.
 - Badges are the one exception: not a plain field, derived internally via
   `Badges.count()` in a module mods can't `require` (not on the
-  documented safe-require allowlist). Likely workaround: cross-check
-  `save.inventory` against the `constants.badges` registry (each badge
-  resolves to a real item id) - not yet tested against a real save.
+  documented safe-require allowlist). Confirmed workaround, by reading
+  `Badges.lua`'s own source directly: it just checks `save.inventory`
+  against the `constants.badges` registry (each entry resolving to a real
+  item id) - a faithful reimplementation of the same logic, not an
+  approximation, now shipped in `main.lua`'s `countBadges()`.
+- `save.money` - a plain top-level key, NOT nested under `save.player`
+  (confirmed directly from `SaveData.newGame()`'s table construction -
+  `player` only holds map/x/y/facing/name/rival/id).
 
 15. **Community Champion.** The remaining blocker is specifically about
     battling, not data access: another player's live party can only be
@@ -443,14 +505,6 @@ Confirmed, from the engine's own working code:
     what you'd be up against"), but any actual "fight" against it would
     be honor-system only (both sides self-report the result), not
     something the mod verifies or enforces.
-16. **Per-friend detail screen** (play time, badges, Pokédex count,
-    League clears). Confirmed buildable: a richer stats snapshot read
-    straight from `save.party`, `save.pokedex.owned`, `save.playTime`,
-    and `save.hallOfFame`, reported on the same ~30s cycle as presence.
-    Badges need the inventory-based workaround above tested first. Once
-    the snapshot exists server-side, a new screen (opened from a
-    friend's entry on the friends list) shows it.
-
 ### Smaller UI polish, not yet scheduled
 
 17. "Friend came online" notifications, custom greetings, unlockable

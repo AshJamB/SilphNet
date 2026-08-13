@@ -147,7 +147,15 @@ return function(mod)
   local accountId, myName, myPass, myTrainerId
   local myMap, myX, myY, myFacing
   local inOverworld = false
-  local gameVersion = "UNKNOWN"   -- << VERIFY >> however the engine exposes RED/BLUE/YELLOW, if at all
+  -- Populated for real at game.ready (see resolveGameVersion below) - was
+  -- a permanent "UNKNOWN" placeholder until now, since there was no
+  -- confirmed way for a mod to read this. Confirmed via reading
+  -- SaveData.lua directly: save.version is a real, always-populated
+  -- top-level field ("red"/"blue"/"yellow"/"gold" - lowercase - guaranteed
+  -- non-nil by a core migration that backfills "red" onto any save
+  -- written before Blue support existed), read the same
+  -- game.save.<key> way as save.flags/save.party elsewhere in this file.
+  local gameVersion = "UNKNOWN"
 
   -- authState: idle|logging_in|need_creds|failed|authed
   local authState = "idle"
@@ -241,6 +249,19 @@ return function(mod)
   -- back - which could read as "that didn't work."
   local removeFriendState = "idle"
 
+  -- Friend detail screen state - set by SilphNetFriends right before
+  -- pushing SilphNetFriendDetail, same "set state, then push" pattern as
+  -- pendingRemoveFriend above. friendDetail holds the LAST successfully
+  -- fetched detail payload for whichever friend is currently being viewed
+  -- (stats/activity/presence, or nil fields if that friend has never
+  -- uploaded any) - friendDetailState tracks the fetch itself so the
+  -- screen can show LOADING... rather than a blank/stale page while the
+  -- request is in flight.
+  local pendingFriendDetail = nil    -- { account_id, name, game_version } set just before pushing
+  local friendDetail = nil           -- { stats, activity, presence } from the last successful fetch
+  local friendDetailState = "idle"   -- idle|loading|failed
+  local friendDetailBusy = false
+
   local function sanitizeName(s)
     if not s or s == "" then return nil end
     s = tostring(s):gsub("[|;,\r\n]", ""):sub(1, 10)
@@ -256,6 +277,28 @@ return function(mod)
   -- deliberately typed into MY NAME, same as the password.
   local function resolveMyName()
     return sanitizeName(opt("name", ""))
+  end
+
+  -- game.save.version is confirmed real (see the comment above gameVersion's
+  -- declaration) - "red"/"blue"/"yellow"/"gold", always non-nil once a
+  -- save exists. Uppercased to match this project's existing
+  -- RED/BLUE/YELLOW/UNKNOWN convention (schema.sql, every server
+  -- endpoint's validation list). GOLD maps to UNKNOWN rather than being
+  -- sent as-is - this mod is Gen 1 only (friend markers, presence, stats
+  -- reading all assume Gen 1's save shape), so a Gen 2 save reporting in
+  -- as "GOLD" would be true but useless everywhere else in this mod;
+  -- servers now accept GOLD too (forward-compat) in case that's revisited
+  -- later, but the client doesn't claim it yet. Falls back to UNKNOWN
+  -- (not an error) if game.save isn't ready yet or version is missing
+  -- entirely - shouldn't happen per the guaranteed-migration confirmation,
+  -- but this function runs at game.ready, right as save loading finishes,
+  -- so a defensive fallback costs nothing.
+  local function resolveGameVersion()
+    local v = game and game.save and game.save.version
+    if type(v) ~= "string" then return "UNKNOWN" end
+    v = v:upper()
+    if v == "RED" or v == "BLUE" or v == "YELLOW" then return v end
+    return "UNKNOWN"
   end
 
   -- ---- HTTP plumbing ------------------------------------------------------
@@ -381,6 +424,30 @@ return function(mod)
     return out
   end
 
+  -- How many DISTINCT game_versions the friends list currently has ANY
+  -- row for, for a given friend's account_id - used to decide whether the
+  -- friends list should bother showing a version label at all (see
+  -- SilphNetFriends' pageLabel). A friend with only one active version
+  -- gets no "(BLUE)" clutter, since there's nothing to disambiguate; this
+  -- only matters once a friend has genuinely played more than one
+  -- version (e.g. finished a BLUE run, started a fresh YELLOW one).
+  -- Recomputed on the fly rather than cached - `friends` itself is small
+  -- (bounded by how many friends one account realistically has) and
+  -- already fully rebuilt on every fireFriendsFetch response, so caching
+  -- this separately would just be another thing to keep in sync for no
+  -- real benefit.
+  local function countFriendVersions(accountId)
+    local seen = {}
+    local n = 0
+    for _, f in pairs(friends) do
+      if f.account_id == accountId and not seen[f.game_version] then
+        seen[f.game_version] = true
+        n = n + 1
+      end
+    end
+    return n
+  end
+
   -- ---- auth ---------------------------------------------------------------
   -- Same in-game NAME + PASSWORD fields as before; behind the scenes this
   -- now hits the web API instead of a game server. A cached session token
@@ -440,6 +507,7 @@ return function(mod)
   -- onAuthOk did, made worse by every call site wrapping it in pcall(), so
   -- it would have failed completely silently with no error ever logged.
   local fireFriendsFetch, firePendingFetch, drainHttpResults, fireOnlineCountFetch, fireNearbyFetch
+  local fireFriendDetailFetch, fireStatsUpload
 
   local function onAuthOk(accId, name, token, trainerId)
     accountId, myName = accId, name or myName
@@ -547,6 +615,99 @@ return function(mod)
   local pendingBusy      = false
   local onlineCountBusy   = false
   local nearbyBusy         = false
+  local statsUploadBusy     = false
+  local sinceStats = 0            -- separate, slower cycle than PRESENCE_INTERVAL - see STATS_INTERVAL
+  local STATS_INTERVAL = 180.0    -- 3 min - badges/dex/money/league wins don't need 30s freshness
+
+  -- VANILLA fallback list, same 8 badges/order as the engine's own
+  -- src/inventory/Badges.lua - only used if constants.badges is somehow
+  -- empty/missing, exactly mirroring that module's own fallback behaviour
+  -- (confirmed by reading Badges.lua directly - Badges.count() itself
+  -- isn't on the mod-safe require allowlist, so this is a faithful
+  -- reimplementation of its logic, not a guess: it walks constants.badges
+  -- (or this fallback), resolves each entry's item id via entry.item or
+  -- entry.id, and checks save.inventory[itemId] truthiness - identical to
+  -- what the engine's own continue-screen code does).
+  local VANILLA_BADGES = {
+    { id = "BOULDERBADGE" }, { id = "CASCADEBADGE" }, { id = "THUNDERBADGE" },
+    { id = "RAINBOWBADGE" }, { id = "SOULBADGE" },    { id = "MARSHBADGE" },
+    { id = "VOLCANOBADGE" }, { id = "EARTHBADGE" },
+  }
+  local function countBadges()
+    local ok, list = pcall(function() return mod.content.constants:get("badges") end)
+    if not ok or type(list) ~= "table" or #list == 0 then list = VANILLA_BADGES end
+    local inv = game and game.save and game.save.inventory
+    if not inv then return 0 end
+    local n = 0
+    for _, entry in ipairs(list) do
+      if inv[entry.item or entry.id] then n = n + 1 end
+    end
+    return n
+  end
+
+  -- Reads everything the stats snapshot needs from game.save directly -
+  -- see research/gen1-save-format-findings.md for how each field was
+  -- confirmed. playTime isn't read here (not shown on the detail screen),
+  -- but pokedex/hallOfFame/money/badges all are.
+  local function readStatsSnapshot()
+    local save = game and game.save
+    if not save then return nil end
+    local seen, caught = 0, 0
+    if type(save.pokedex) == "table" then
+      if type(save.pokedex.seen) == "table" then for _ in pairs(save.pokedex.seen) do seen = seen + 1 end end
+      if type(save.pokedex.owned) == "table" then for _ in pairs(save.pokedex.owned) do caught = caught + 1 end end
+    end
+    local leagueWins = 0
+    if type(save.hallOfFame) == "table" then leagueWins = #save.hallOfFame end
+    return {
+      badges = countBadges(),
+      pokedexSeen = seen,
+      pokedexCaught = caught,
+      leagueWins = leagueWins,
+      -- game.save.money, NOT save.player.money - confirmed by reading
+      -- SaveData.lua's own newGame() table construction directly: money
+      -- is a plain top-level key sibling to player/party/flags/pokedex,
+      -- not nested under player (player only holds map/x/y/facing/name/
+      -- rival/id). An earlier draft of this guessed save.player.money by
+      -- analogy with save.player.name and would have silently read nil
+      -- (falling back to 0) for every real player - caught before
+      -- shipping by checking the actual source rather than assuming.
+      money = tonumber(save.money) or 0,
+    }
+  end
+
+  -- Activity message, queued by the real pokemon.caught event handler
+  -- (see wiring section below) and drained/uploaded by pumpPresenceTimer -
+  -- NOT a poll-and-diff against save.pokedex.owned like an earlier draft
+  -- of this did. That draft could only ever report species, since
+  -- pokedex.owned is just a set with no level field - switching to the
+  -- real pokemon.caught event (documented payload: { battle, mon,
+  -- species, isNew, ball, destination, game }) gets species from the
+  -- payload's own `species` field and level from `mon.level` - `mon` is
+  -- the same live party-mon object species/level/moves/etc. are read
+  -- from everywhere else in this project (see
+  -- research/gen1-save-format-findings.md), just not yet inserted into
+  -- save.party at the moment this event fires.
+  --
+  -- Two separate lines, not one string with a space - a species name
+  -- like BLASTOISE is long enough that "CAUGHT LVL 25 BLASTOISE" risks
+  -- overflowing the 16-char/line budget every screen in this file
+  -- respects, per direct feedback. Stored server-side as ONE string with
+  -- a literal newline joining the two lines (stats.php doesn't need to
+  -- know or care that it's two lines - it's still just "the activity
+  -- message" as far as the database and endpoint are concerned), split
+  -- back into two lines only where it's drawn (SilphNetFriendDetail).
+  local pendingActivity = nil   -- "CAUGHT LVL 25\nBLASTOISE" or nil
+  local function queueCatchActivity(mon, species)
+    local level = mon and tonumber(mon.level)
+    local name = tostring(species or "?"):upper()
+    local line1 = level and ("CAUGHT LVL " .. level) or "CAUGHT"
+    -- Each line gets its own 16-char cap (this screen's real budget),
+    -- not one combined 32-char cap - a long species name can't borrow
+    -- room from the level line or vice versa, since they're drawn on
+    -- separate rows.
+    pendingActivity = line1:sub(1, 16) .. "\n" .. name:sub(1, 16)
+  end
 
   -- Global online count (everyone, not just friends) and who's on the
   -- CURRENT map (friend or not) - both use the same ~30s cycle as
@@ -590,6 +751,44 @@ return function(mod)
     if authState ~= "authed" or not myMap then return end
     nearbyBusy = true
     httpPost("nearby", "/nearby.php", { token = mod.save:get("token") or "", map_id = myMap })
+  end
+
+  -- On-demand only - fired once when SilphNetFriendDetail opens, NOT on
+  -- the 30s presence cycle. Unlike friends/pending/online-count/nearby,
+  -- this is about ONE specific friend the player has chosen to look at
+  -- right now, not something every screen needs kept fresh in the
+  -- background. Fetches ALL of that friend's versions in one request
+  -- (see friend_detail.php) - the screen cycles through every version's
+  -- STATS/ACTIVITY pages on a single button (A), so it needs the whole
+  -- set upfront rather than firing a fresh request on every press.
+  fireFriendDetailFetch = function(accountId)
+    if authState ~= "authed" or not accountId then return end
+    friendDetailBusy = true
+    httpPost("friend_detail", "/friend_detail.php", {
+      token = mod.save:get("token") or "", account_id = accountId,
+    })
+  end
+
+  -- Uploads the caller's OWN stats snapshot and/or a fresh activity
+  -- message - see stats.php. Called on a slower cycle than presence (see
+  -- pumpPresenceTimer) for the stats fields, and immediately/independently
+  -- whenever a new activity event is detected (see checkActivityEvents).
+  -- statsFields and activity are both optional (pass nil to omit either)
+  -- since a stats-cycle upload and an activity event don't necessarily
+  -- happen at the same moment.
+  fireStatsUpload = function(statsFields, activity)
+    if authState ~= "authed" then return end
+    local fields = { token = mod.save:get("token") or "", game_version = gameVersion }
+    if statsFields then
+      fields.badges = statsFields.badges
+      fields.pokedex_seen = statsFields.pokedexSeen
+      fields.pokedex_caught = statsFields.pokedexCaught
+      fields.league_wins = statsFields.leagueWins
+      fields.money = statsFields.money
+    end
+    if activity then fields.activity = activity end
+    statsUploadBusy = true
+    httpPost("stats_upload", "/stats.php", fields)
   end
 
   local function fireAddFriend(trainerId)
@@ -1027,11 +1226,40 @@ return function(mod)
         function self:update(dt)
           local input = g.input
           local ids = sortedIds()
-          if input:wasPressed("right") or input:wasPressed("a") then
+          -- A used to double as "page right" here (alongside DPAD RIGHT) -
+          -- moved to DPAD-only paging now that A opens the new friend
+          -- detail screen instead, same reasoning as the Nearby screen
+          -- (which already paged on DPAD RIGHT/LEFT, not A, from the
+          -- start) - A needed to mean one thing consistently, not
+          -- "page" on this screen and "open" on the next one.
+          if input:wasPressed("right") then
             self.page = (#ids == 0) and 1 or (self.page % #ids) + 1
           end
           if input:wasPressed("left") then
             self.page = (#ids == 0) and 1 or ((self.page - 2) % #ids) + 1
+          end
+          -- A opens the detail screen for whoever's currently on screen -
+          -- pendingFriendDetail set here, same "set state, then push"
+          -- pattern as pendingRemoveFriend/SELECT below. Fires a fresh
+          -- fetch immediately rather than waiting on whatever's left over
+          -- from a previous visit to a DIFFERENT friend's detail screen.
+          if input:wasPressed("a") and #ids > 0 then
+            local f = friends[ids[self.page]]
+            if f and f.account_id then
+              -- game_version no longer part of pendingFriendDetail - the
+              -- detail screen now fetches and cycles through ALL of this
+              -- friend's versions in one go (see friend_detail.php),
+              -- rather than being pointed at one specific version up
+              -- front. Which friends-list ROW you pressed A on no longer
+              -- matters for what the detail screen shows - a friend with
+              -- two versions shows the exact same detail screen whether
+              -- you opened it from their BLUE row or their YELLOW row.
+              pendingFriendDetail = { account_id = f.account_id, name = f.name or "?" }
+              friendDetail = nil
+              friendDetailState = "loading"
+              fireFriendDetailFetch(f.account_id)
+              mod.ui.push(g, "SilphNetFriendDetail")
+            end
           end
           -- SELECT opens a confirm screen for the friend currently on
           -- screen, same "don't delete on one button press" pattern as
@@ -1062,8 +1290,26 @@ return function(mod)
             local isOnline = lastSeenUnix and (os.time() - lastSeenUnix) <= OFFLINE_AFTER
             -- Page counter + name on their own lines - "99/99  " plus a
             -- full 10-char name would overflow the same 16-char budget as
-            -- every other line on these screens.
-            Font.draw((self.page) .. "/" .. #ids, 16, 32)
+            -- every other line on these screens. Version folded onto the
+            -- SAME line as the page counter ("1/3 (BLUE)") rather than
+            -- given its own row - this screen is already at its data-row
+            -- limit (6 rows, y=32 to y=104) with only 3 hint rows left
+            -- below for A:DETAIL/LEFT-RIGHT:PAGE/B:BACK, so a version line
+            -- here would have collided with an existing hint. Only shown
+            -- while this specific entry is ONLINE - offline, no version
+            -- is shown at all, regardless of how many versions this
+            -- friend has, per direct feedback ("when they are online, it
+            -- should show the version they are playing, simple, offline,
+            -- no version at all"). Deliberately not gated on
+            -- countFriendVersions anymore - a friend with only one
+            -- version but currently online still shows it, since "what
+            -- are they playing right now" is the question this answers,
+            -- not "does this friend have more than one version at all".
+            local pageLabel = (self.page) .. "/" .. #ids
+            if isOnline then
+              pageLabel = (pageLabel .. " (" .. (f.game_version or "UNKNOWN") .. ")"):sub(1, 16)
+            end
+            Font.draw(pageLabel, 16, 32)
             Font.draw((f.name or "?"):sub(1, 16), 16, 40)
             -- friends.php already returns trainer_id (zero-padded, same as
             -- everywhere else it's shown) - it just wasn't drawn here
@@ -1078,15 +1324,10 @@ return function(mod)
               Font.draw(friendlyMapName(f.map_id):sub(1, 16), 16, 72)
               Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 88)
               Font.draw(ago, 16, 104)
-              -- No game-version line here on purpose: the engine has no way
-              -- for a mod to detect which cartridge (Red/Blue/Yellow) is
-              -- running, and there's no in-game self-select for it yet
-              -- either, so every ping is tagged the same placeholder value
-              -- server-side. Showing that placeholder to the player just
-              -- reads as a bug ("why does it say UNKNOWN?") rather than a
-              -- real feature - better to say nothing until there's a real
-              -- value. Revisit once a version picker exists (see main.lua
-              -- git history / project notes for that discussion).
+              -- Version is now real (see resolveGameVersion) - shown on
+              -- the page-counter line above instead of a dedicated row
+              -- here (see comment above pageLabel) since this screen has
+              -- no spare row left for it.
             else
               Font.draw("NEVER SEEN YET", 16, 72)
             end
@@ -1096,8 +1337,195 @@ return function(mod)
           -- unlike most others in this file which are genuinely at their
           -- margin limit. LEFT/RIGHT hint only shown with >1 friend, since
           -- paging does nothing with 0 or 1.
+          -- A:DETAIL only shown with >=1 friend (nothing to open with
+          -- none); LEFT/RIGHT:PAGE only with >1, same as before.
+          if #ids > 0 then Font.draw("A:DETAIL", 16, 112) end
           if #ids > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, 120) end
           Font.draw("B:BACK SL:REMOVE", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Per-friend detail screen - pushed via A on a friend in SilphNetFriends.
+  -- Two pages, DPAD LEFT/RIGHT between them (same paging convention as
+  -- every other multi-page screen in this file): STATS (badges, Pokedex
+  -- seen/caught, League wins, money - all self-reported by the friend's
+  -- own client via stats.php, since a mod can only ever read ITS OWN
+  -- game.save, never a friend's) and ACTIVITY (their latest status
+  -- message with its OWN time-ago, plus last-seen repeated from the main
+  -- friends screen - deliberately not moved off that screen, just also
+  -- shown here). These are two genuinely different timestamps - catching
+  -- something and being last seen online are different moments (a friend
+  -- could catch something then go offline, or still be walking around
+  -- minutes after) - so they're never collapsed into one "X AGO" line.
+  pcall(function()
+    mod.content.screens:register("SilphNetFriendDetail", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true, slot = 1 }
+        -- Builds the flat A-press cycle from friendDetail.versions: two
+        -- slots per version (STATS, then ACTIVITY), in whatever order
+        -- friend_detail.php returned versions (already sorted
+        -- alphabetically server-side). A version with neither stats nor
+        -- activity was already excluded server-side (see friend_detail.php),
+        -- so every version reaching this point gets both its slots -
+        -- "NO STATS YET"/"NO ACTIVITY YET" still covers the case where a
+        -- version has ONE of the two but not both. Recomputed fresh each
+        -- call rather than cached on self, since friendDetail can change
+        -- (a fresh fetch lands) without this screen being re-created.
+        local function slots()
+          local out = {}
+          for _, v in ipairs((friendDetail and friendDetail.versions) or {}) do
+            -- v is { game_version, stats, activity } per version (see
+            -- drainHttpResults' friend_detail parsing) - each slot
+            -- carries its OWN copy of stats/activity straight from that
+            -- version entry, not a shared/looked-up reference, so
+            -- draw() below never has to re-match version strings.
+            out[#out + 1] = { kind = "STATS", version = v.game_version, stats = v.stats, activity = v.activity }
+            out[#out + 1] = { kind = "ACTIVITY", version = v.game_version, stats = v.stats, activity = v.activity }
+          end
+          return out
+        end
+        function self:update(dt)
+          -- Same reasoning as every other screen here that waits on a
+          -- network result while sitting still (SilphNetStatus, Add
+          -- Friend, Remove Friend confirm) - without this, a fetch that
+          -- finishes while the player isn't walking would sit fully
+          -- complete but undrained until they happened to step
+          -- somewhere else first.
+          pcall(drainHttpResults)
+          local input = g.input
+          -- A is the ONLY navigation button on this screen now - cycles
+          -- STATS -> ACTIVITY -> next version's STATS -> ACTIVITY -> ...
+          -- and wraps back to the first slot, in one flat loop, per
+          -- direct feedback requesting exactly this instead of the
+          -- previous two-axis LEFT/RIGHT-for-page + SELECT-for-version
+          -- scheme. Only versions with real stats/activity data appear
+          -- at all (enforced server-side by friend_detail.php) - a
+          -- friend who's only ever played one version just gets a
+          -- 2-slot loop (STATS, ACTIVITY), identical in feel to how this
+          -- screen worked before this change.
+          if input:wasPressed("a") then
+            local s = slots()
+            if #s > 0 then self.slot = (self.slot % #s) + 1 end
+          end
+          if input:wasPressed("b") then
+            pendingFriendDetail = nil
+            g.stack:pop()
+          end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          local name = (pendingFriendDetail and pendingFriendDetail.name or "?"):sub(1, 16)
+          if friendDetailState == "loading" then
+            Font.draw(name, 16, 8)
+            Font.draw("LOADING...", 16, 40)
+          elseif friendDetailState == "failed" then
+            Font.draw(name, 16, 8)
+            Font.draw("COULDN'T LOAD", 16, 40)
+            Font.draw("TRY AGAIN LATER", 16, 48)
+          else
+            local s = slots()
+            if #s == 0 then
+              -- Accepted friend, but genuinely nothing to show yet on
+              -- ANY version (never uploaded stats or activity at all) -
+              -- distinct from "NO STATS YET" on a specific version's
+              -- page, since there isn't even a page to land on here.
+              Font.draw(name, 16, 8)
+              Font.draw("NO DATA YET", 16, 32)
+              Font.draw("(NOT UPLOADED", 16, 40)
+              Font.draw("BY THEM YET)", 16, 48)
+            else
+              if self.slot > #s then self.slot = 1 end
+              local cur = s[self.slot]
+              -- Title is "<name> STATS"/"<name> ACTIVITY" (y=8), with the
+              -- game version on its OWN line right underneath (y=16) -
+              -- e.g. "ARCHADA STATS" / "BLUE" - rather than folded onto
+              -- the same line or onto a hint line further down, per
+              -- direct feedback ("wouldn't it just be better if it
+              -- said... ARCHADA STATS / BLUE"). Shown for every friend,
+              -- even ones with only one version - it's now just part of
+              -- reading the page, not a conditional disambiguation hint.
+              Font.draw((name .. " " .. cur.kind):sub(1, 16), 16, 8)
+              Font.draw(cur.version:sub(1, 16), 16, 16)
+              if cur.kind == "STATS" then
+                -- 5 data rows, y=32 to y=96 (16px apart) - checked
+                -- against a real pixel mockup after an earlier draft
+                -- collided its own LEAGUE WINS/MONEY lines with the
+                -- hint row below. Shifted down from where they sat
+                -- before the version got its own title line (was y=8
+                -- start with data from y=32; version's extra line
+                -- didn't need to push these down further since y=16 was
+                -- already spare room above y=32).
+                local st = cur.stats
+                if not st then
+                  Font.draw("NO STATS YET", 16, 32)
+                  Font.draw("(NOT UPLOADED", 16, 40)
+                  Font.draw("BY THEM YET)", 16, 48)
+                else
+                  -- "BADGES" + right-padded count, same left-label/
+                  -- right-value layout as every stats-style line
+                  -- elsewhere in this file (e.g. FRIENDS/REQUESTS).
+                  -- Badge count is 0-8, so no more than 1 digit ever
+                  -- appears here - "BADGES     6/8" comfortably fits
+                  -- the 16-char budget even with the "/8" suffix.
+                  Font.draw("BADGES     " .. tostring(tonumber(st.badges) or 0) .. "/8", 16, 32)
+                  Font.draw("SEEN     " .. tostring(tonumber(st.pokedex_seen) or 0), 16, 48)
+                  Font.draw("CAUGHT   " .. tostring(tonumber(st.pokedex_caught) or 0), 16, 64)
+                  Font.draw("LEAGUE WINS " .. tostring(tonumber(st.league_wins) or 0), 16, 80)
+                  -- Money can be up to 6 digits (real games cap at
+                  -- 999999) - "MONEY  " (7 chars) + 6 digits = 13,
+                  -- comfortably under 16 even at the maximum.
+                  Font.draw("MONEY  " .. tostring(tonumber(st.money) or 0), 16, 96)
+                end
+              else
+                local act = cur.activity
+                if act and act.message then
+                  -- Two lines, not one - a species name like BLASTOISE
+                  -- is long enough that cramming "CAUGHT LVL 25
+                  -- BLASTOISE" onto one line risked overflowing the
+                  -- 16-char budget, per direct feedback. Stored
+                  -- server-side as one string joined by a literal "\n"
+                  -- (see queueCatchActivity) - split back into two lines
+                  -- only here, where it's drawn. A pre-v1.5.0
+                  -- single-line activity message (no newline in it)
+                  -- still draws fine - line2 is just "" in that case.
+                  local line1, line2 = act.message:match("^([^\n]*)\n?(.*)$")
+                  Font.draw((line1 or ""):sub(1, 16), 16, 32)
+                  Font.draw((line2 or ""):sub(1, 16), 16, 40)
+                  Font.draw(timeAgoText(parseMysqlDatetimeUtc(act.created_at)), 16, 48)
+                else
+                  Font.draw("NO ACTIVITY YET", 16, 32)
+                end
+                -- Last-seen repeated here from the main friends screen -
+                -- NOT moved, that screen still shows it exactly as
+                -- before. This is the single most-recent presence row
+                -- across ALL of this friend's versions (see
+                -- friend_detail.php), not scoped to the version this
+                -- particular ACTIVITY page happens to be showing - "last
+                -- seen" means "when were they last online AT ALL",
+                -- which is a property of the friend, not of one save.
+                -- Deliberately its own time-ago, not the activity
+                -- message's - they can genuinely differ (catching
+                -- something and going offline are different moments).
+                local pr = friendDetail and friendDetail.presence
+                if pr and pr.map_id then
+                  Font.draw("LAST SEEN", 16, 72)
+                  Font.draw(friendlyMapName(pr.map_id):sub(1, 16), 16, 80)
+                  Font.draw(timeAgoText(parseMysqlDatetimeUtc(pr.last_seen)), 16, 88)
+                else
+                  Font.draw("NEVER SEEN YET", 16, 72)
+                end
+              end
+            end
+          end
+          if friendDetailState == "idle" then
+            Font.draw("A:NEXT B:BACK", 16, 112)
+          else
+            Font.draw("B:BACK", 16, 112)
+          end
         end
         return self
       end,
@@ -1444,6 +1872,77 @@ return function(mod)
           else
             mod.log:info("SilphNet: nearby fetch failed: %s", tostring(body))
           end
+        elseif tag == "stats_upload" then
+          statsUploadBusy = false
+          if not (status == "OK" and jsonIsOk(body)) then
+            mod.log:info("SilphNet: stats upload failed: %s", tostring(body))
+          end
+        elseif tag == "friend_detail" then
+          friendDetailBusy = false
+          if status == "OK" and jsonIsOk(body) then
+            -- friend_detail.php now returns ALL of a friend's versions in
+            -- one response: {"versions":[{"game_version",
+            -- "stats":{...}|null,"activity":{...}|null}, ...],
+            -- "presence":{...}|null} - a genuinely nested shape (an array
+            -- of objects, each with two of ITS OWN nested objects) that
+            -- none of the existing helpers cover: parseObjects assumes
+            -- flat records (no nesting), and the single-object "nested"
+            -- helper an earlier version of this used only pulled one
+            -- level, not an array of them. Pulled apart in three steps:
+            -- extract "presence" the same single-nested-object way as
+            -- before, then scan "versions" for each top-level {...}
+            -- entry via balanced brace matching (needed because each
+            -- entry itself contains nested {...} for stats/activity - a
+            -- naive %b{} scan would still work here since Lua's %b syntax
+            -- IS brace-balanced, but it can't be combined with gmatch
+            -- directly, so this walks the string by hand instead), then
+            -- runs the same flat-field extraction on each entry AND on
+            -- its two nested sub-objects.
+            local function nestedObj(str, key)
+              local obj = string.match(str, '"' .. key .. '"%s*:%s*(%{[^{}]-%})')
+              if not obj then return nil end
+              local rec = {}
+              for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*"?([^",}]*)"?') do rec[k] = v end
+              return rec
+            end
+            local presence = nestedObj(body, "presence")
+            local versionsArrayBody = string.match(body, '"versions"%s*:%s*%[(.-)%]%s*,%s*"presence"')
+            local versions = {}
+            if versionsArrayBody then
+              -- Walk the array body character by character, tracking
+              -- brace depth, so each ENTRY (itself containing nested
+              -- {...} for stats/activity) is extracted whole rather than
+              -- a naive %{[^{}]-%} match stopping at the first inner
+              -- closing brace.
+              local depth, entryStart = 0, nil
+              for i = 1, #versionsArrayBody do
+                local c = versionsArrayBody:sub(i, i)
+                if c == "{" then
+                  if depth == 0 then entryStart = i end
+                  depth = depth + 1
+                elseif c == "}" then
+                  depth = depth - 1
+                  if depth == 0 and entryStart then
+                    local entry = versionsArrayBody:sub(entryStart, i)
+                    local gv = string.match(entry, '"game_version"%s*:%s*"([^"]*)"')
+                    if gv then
+                      versions[#versions + 1] = {
+                        game_version = gv,
+                        stats = nestedObj(entry, "stats"),
+                        activity = nestedObj(entry, "activity"),
+                      }
+                    end
+                    entryStart = nil
+                  end
+                end
+              end
+            end
+            friendDetail = { versions = versions, presence = presence }
+            friendDetailState = "idle"
+          else
+            friendDetailState = "failed"
+            mod.log:info("SilphNet: friend detail fetch failed: %s", tostring(body))
+          end
         else
           handleHttpResult(tag, status, body)
         end
@@ -1461,7 +1960,9 @@ return function(mod)
     if authState ~= "authed" or not inOverworld then return end
     local now = os.time()
     if not lastPumpAt then lastPumpAt = now end
-    sincePresence = sincePresence + (now - lastPumpAt)
+    local elapsed = now - lastPumpAt
+    sincePresence = sincePresence + elapsed
+    sinceStats = sinceStats + elapsed
     lastPumpAt = now
     if sincePresence >= PRESENCE_INTERVAL then
       sincePresence = 0
@@ -1471,6 +1972,23 @@ return function(mod)
       if not onlineCountBusy then fireOnlineCountFetch() end
       if not nearbyBusy then fireNearbyFetch() end
     end
+    -- pendingActivity is set by the real pokemon.caught event handler
+    -- (see wiring section), not polled here - this just drains whatever's
+    -- queued, uploading it right away rather than waiting for the next
+    -- 3-minute stats cycle. Stats themselves (badges/dex counts/money/
+    -- league wins) stay on the slower STATS_INTERVAL cycle below - none
+    -- of those need to be as fresh as "just caught something."
+    local activity = pendingActivity
+    if sinceStats >= STATS_INTERVAL or activity then
+      if not statsUploadBusy then
+        local snap = (sinceStats >= STATS_INTERVAL) and readStatsSnapshot() or nil
+        if snap or activity then
+          fireStatsUpload(snap, activity)
+          if activity then pendingActivity = nil end
+          if sinceStats >= STATS_INTERVAL then sinceStats = 0 end
+        end
+      end
+    end
   end
 
   -- ---- wiring ---------------------------------------------------------------
@@ -1478,6 +1996,7 @@ return function(mod)
     game = ev.game
     math.randomseed(os.time() + math.floor((os.clock() or 0) * 1000))
     myName = resolveMyName()
+    gameVersion = resolveGameVersion()
     beginAuth()
   end)
 
@@ -1499,6 +2018,18 @@ return function(mod)
   end)
 
   mod.events:on("map.exited", function() inOverworld = false; despawnAllMarkers() end)
+
+  -- Real, documented event (Reference-Events: payload { battle, mon,
+  -- species, isNew, ball, destination, game }) - not a poll-and-diff
+  -- against save.pokedex.owned like an earlier draft used, which had no
+  -- way to get a level at all. Fires for every catch, not just NEW
+  -- species (isNew is available if this ever needs to filter to
+  -- first-time catches only, but "just caught a Pokemon" reads fine
+  -- either way - a friend re-catching a species they already have is
+  -- still real, current activity worth showing).
+  mod.events:on("pokemon.caught", function(ev)
+    pcall(queueCatchActivity, ev and ev.mon, ev and ev.species)
+  end)
 
   mod.events:on("world.stepped", function(ev)
     myMap, myX, myY = ev.mapId, ev.x, ev.y

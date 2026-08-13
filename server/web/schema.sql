@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS presence (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   account_id   VARCHAR(16) NOT NULL,
-  game_version VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN', -- RED | BLUE | YELLOW | UNKNOWN
+  game_version VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN', -- RED | BLUE | YELLOW | GOLD | UNKNOWN
   name         VARCHAR(16) NOT NULL,
   map_id       VARCHAR(64) NOT NULL,
   x            INT NOT NULL,
@@ -58,4 +58,46 @@ CREATE TABLE IF NOT EXISTS friends (
   UNIQUE KEY uniq_pair (account_id, friend_id),
   INDEX idx_account (account_id),
   INDEX idx_friend (friend_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Self-reported stats snapshot, uploaded by each client on a slower cycle
+-- than presence (stats don't need to be second-fresh - see stats.php).
+-- One row per (account_id, game_version), same key shape as presence, for
+-- the same reason: an account can have several active saves tracked as
+-- separate "characters". league_wins is #save.hallOfFame entries, badges
+-- is derived client-side from save.inventory + constants.badges (see
+-- main.lua's countBadges() - Badges.count() itself isn't mod-accessible).
+CREATE TABLE IF NOT EXISTS friend_stats (
+  account_id     VARCHAR(16) NOT NULL,
+  game_version   VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN',
+  badges         TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  pokedex_seen   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  pokedex_caught SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  league_wins    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  money          INT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at     DATETIME NOT NULL,
+  PRIMARY KEY (account_id, game_version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Latest self-reported activity message per (account_id, game_version) -
+-- deliberately just ONE row per character, overwritten on every new
+-- event, not a history log. message is stored as TWO lines joined by a
+-- literal "\n" (e.g. "CAUGHT LVL 25\nBLASTOISE" - split back into two
+-- lines only where it's drawn, in main.lua's SilphNetFriendDetail) rather
+-- than one combined line, since a long species name plus the level
+-- prefix risked overflowing the mod's 16-char/line display budget on one
+-- line. Each half is separately capped at 16 chars client-side
+-- (queueCatchActivity in main.lua), so the worst case ("CAUGHT LVL 100" +
+-- "\n" + a 16-char name) is 31 bytes - comfortably inside VARCHAR(32).
+-- created_at is the event's own timestamp, independent of
+-- presence.last_seen - catching something and being last seen online are
+-- different moments (you can catch something then walk offline, or the
+-- reverse), so the friend detail screen shows both times separately
+-- rather than conflating them.
+CREATE TABLE IF NOT EXISTS friend_activity (
+  account_id    VARCHAR(16) NOT NULL,
+  game_version  VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN',
+  message       VARCHAR(32) NOT NULL,
+  created_at    DATETIME NOT NULL,
+  PRIMARY KEY (account_id, game_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

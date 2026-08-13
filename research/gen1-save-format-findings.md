@@ -135,6 +135,7 @@ and grepped - not guessed):
 | What | Real field | Notes |
 |---|---|---|
 | Player name | `save.player.name` | Already known from the Oak-speech hook table; now doubly confirmed |
+| Player money | `save.money` | NOT nested under `save.player` (a real guess-by-analogy mistake caught before shipping v1.5.0's friend detail screen) - confirmed directly from `SaveData.newGame()`'s own table construction: `money` is a plain top-level key, sibling to `player`/`party`/`flags`/`pokedex`, seeded from `boot.startMoney` (vanilla default 3000) |
 | Party | `save.party` | A plain Lua array/list, `ipairs`-able - `SaveData.validate` calls `scrubMonList(save.party, ...)` directly on it |
 | A party mon | `mon.species`, `mon.level`, `mon.moves` (array of `{id, pp}` or bare move ids), `mon.dvs`, `mon.statExp`, `mon.stats` | From `scrubKnownMon` - `species` is already a resolved string id, not a raw index byte; no lookup table needed unlike the raw .sav bytes |
 | Pokédex owned | `save.pokedex.owned` | A set/map keyed by species id - `SaveData.slotSummary` counts entries via `pairs()` for the dex count shown on the title screen |
@@ -168,3 +169,31 @@ This is now enough to start building the stats-snapshot mechanism for
 roadmap items #9 and #15 - reading `game.save.party`, `game.save.pokedex`,
 `game.save.playTime`, and `game.save.hallOfFame` directly, with badges
 derived from `save.inventory` + `constants.badges` rather than assumed.
+
+## Addendum - game version detection (`save.version`)
+
+A separate, previously-unresolved `<< VERIFY >>` in `main.lua` - not
+about save CONTENTS, but about which cartridge (Red/Blue/Yellow/Gold)
+produced the save at all. Confirmed the same way as everything else in
+this document: by reading `SaveData.lua`'s own `SaveData.newGame(boot)`
+table construction directly, rather than guessing.
+
+`save.version` is a plain top-level string key, sibling to `player`/
+`party`/`flags`/etc: `version = boot.version or "red"`. Confirmed values
+(from `GameVersion.lua`'s `GameVersion.VERSIONS` table keys) are exactly
+`"red"`, `"blue"`, `"yellow"`, `"gold"` - lowercase, four values not
+three (Gold is Gen 2, currently beta in the launcher). Guaranteed non-nil
+on every real save by an explicit core migration
+(`SaveData.addCoreMigration(2, ...)`) that backfills `"red"` onto any
+save written before Blue support existed - so `game.save.version` is
+always safely readable once a save exists, no defensive nil-check dance
+needed beyond a basic type check.
+
+SilphNet reads this at `game.ready` (`resolveGameVersion()` in
+`main.lua`), uppercases it to match the project's existing
+RED/BLUE/YELLOW/UNKNOWN convention, and maps `"gold"` to `UNKNOWN` -
+this mod is Gen 1 only (friend markers, presence, and every stats field
+read so far all assume Gen 1's save shape), so a Gen 2 save correctly
+reporting in as GOLD would be true but not actually useful anywhere else
+in this mod yet. Server endpoints accept GOLD as a stored value anyway
+(forward-compatible), even though the client doesn't send it today.
