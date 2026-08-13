@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.6.2 - async presence and friends, added in-game.** Log in with
+**Status: v1.6.3 - async presence and friends, added in-game.** Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
 typing, no web page. The game periodically reports where you were last
@@ -131,12 +131,14 @@ depending on name length. Select that row for the status screen:
   does nothing yet at this point - there's no friends list to show
   before you're logged in.
 - **Once logged in**: **A** opens the friends list (name, online/offline,
-  last-known map and tile, how long ago) - also shows a global online
-  count and your friend count on the same line (`FRIENDSn ONn`). **START**
-  is now re-auth (forces a fresh login check) - swapped from the
-  original layout since A feels more natural as the "open/select" button,
-  matching how A is used everywhere else in this mod (accepting a
-  request, confirming a removal).
+  last-known map and tile, how long ago). The **A:FRIENDS** hint itself
+  also shows the global online count when there IS anyone online
+  (`A:FRIENDS(2 ON)`) - dropped entirely when nobody's online, rather than
+  showing a placeholder like `(0 ON)` or `(- ON)`. **START** is now
+  re-auth (forces a fresh login check) - swapped from the original layout
+  since A feels more natural as the "open/select" button, matching how A
+  is used everywhere else in this mod (accepting a request, confirming a
+  removal).
 A second Start Menu row, **SN NEARBY**, sits right below the main
 **SN \<name\>** row (rather than being folded into the friends
 list) and opens its own screen: everyone else currently on your own
@@ -167,17 +169,22 @@ and, when standing on their last-known map, as a static marker on the
 ground.
 
 The friends list shows one friend per screen, not a scrolling list - the
-"N/M" counter at the top (e.g. "1/3") means "friend 1 of 3 total," and
-**LEFT/RIGHT** switches which one is shown. While a friend entry is
-ONLINE, that counter also shows which version they're playing right now
-("1/3 (BLUE)") - offline, no version is shown at all, regardless of how
-many versions that friend has. **A** opens that friend's detail screen
+title line reads "FRIENDS N/M" (e.g. "FRIENDS 1/3", meaning "friend 1 of
+3 total"), and **LEFT/RIGHT** switches which one is shown. While a friend entry is
+ONLINE, the ONLINE/OFFLINE line itself also shows which version they're
+playing right now ("ONLINE (BLUE)") - offline, no version is shown at
+all, regardless of how many versions that friend has. **A** opens that friend's detail screen
 (see below); **SELECT** opens a confirm screen to remove the friend
 currently on screen (**A** confirms, **B** cancels) - it removes the
 friendship for both sides, not just locally, and the screen waits for the
 server to fully confirm the removal AND for the friends list to actually
 refresh (showing "REMOVING..." throughout) before returning to the list,
 rather than popping back while still showing the just-removed friend.
+The bottom hint line reads **A:DETAIL LR:PAGE** (both controls combined
+onto one line) - this screen is already at its 144px display limit, so
+that combination is what frees enough room for a real gap above it,
+fixing an earlier report that the last data row and the hint row beneath
+it looked squashed together.
 
 **Friend detail screen** (**A** on a friend in the list): **A** cycles
 through every page in one flat loop - that friend's STATS, then their

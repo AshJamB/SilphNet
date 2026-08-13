@@ -1126,10 +1126,21 @@ return function(mod)
             -- ST:RE-AUTH line (also reported as too squashed, and that
             -- hint didn't exist on this screen before - re-auth already
             -- works fine unlabelled, so it's dropped rather than adding
-            -- a line that wasn't there previously). No space after the
-            -- colon ("FRIENDS(" not "FRIENDS (") keeps this at 16 chars
-            -- even at a double-digit online count.
-            Font.draw("A:FRIENDS(" .. (onlineCount and tostring(onlineCount) or "-") .. " ON)", 16, 96)
+            -- a line that wasn't there previously).
+            --
+            -- The "(N ON)" suffix is now dropped ENTIRELY whenever there's
+            -- nobody online (onlineCount is 0) - per direct feedback, it
+            -- used to always show something here (even "(- ON)" before
+            -- the first fetch landed, or "(0 ON)" once it landed with
+            -- nobody online), which read as a placeholder rather than a
+            -- real "someone's online" indicator. Now it only appears once
+            -- there's an actual positive count to report - "A:FRIENDS"
+            -- alone otherwise, exactly the same as if this feature never
+            -- existed. Still no space after the colon when it IS shown
+            -- ("FRIENDS(" not "FRIENDS (") to keep this at 16 chars even
+            -- at a double-digit online count.
+            local suffix = (onlineCount and onlineCount > 0) and ("(" .. tostring(onlineCount) .. " ON)") or ""
+            Font.draw(("A:FRIENDS" .. suffix):sub(1, 16), 16, 96)
             Font.draw("DPAD R:ADD L:REQ", 16, 104)
           end
           Font.draw("B:BACK SL:RESET", 16, 120)
@@ -1278,9 +1289,9 @@ return function(mod)
         end
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
-          Font.draw("FRIENDS", 16, 8)
           local ids = sortedIds()
           if #ids == 0 then
+            Font.draw("FRIENDS", 16, 8)
             Font.draw("NO FRIENDS YET", 16, 40)
           else
             local id = ids[self.page]
@@ -1288,59 +1299,70 @@ return function(mod)
             local lastSeenUnix = parseMysqlDatetimeUtc(f.last_seen)
             local ago = timeAgoText(lastSeenUnix)
             local isOnline = lastSeenUnix and (os.time() - lastSeenUnix) <= OFFLINE_AFTER
-            -- Page counter + name on their own lines - "99/99  " plus a
-            -- full 10-char name would overflow the same 16-char budget as
-            -- every other line on these screens. Version folded onto the
-            -- SAME line as the page counter ("1/3 (BLUE)") rather than
-            -- given its own row - this screen is already at its data-row
-            -- limit (6 rows, y=32 to y=104) with only 3 hint rows left
-            -- below for A:DETAIL/LEFT-RIGHT:PAGE/B:BACK, so a version line
-            -- here would have collided with an existing hint. Only shown
-            -- while this specific entry is ONLINE - offline, no version
-            -- is shown at all, regardless of how many versions this
-            -- friend has, per direct feedback ("when they are online, it
-            -- should show the version they are playing, simple, offline,
-            -- no version at all"). Deliberately not gated on
-            -- countFriendVersions anymore - a friend with only one
-            -- version but currently online still shows it, since "what
-            -- are they playing right now" is the question this answers,
-            -- not "does this friend have more than one version at all".
-            local pageLabel = (self.page) .. "/" .. #ids
-            if isOnline then
-              pageLabel = (pageLabel .. " (" .. (f.game_version or "UNKNOWN") .. ")"):sub(1, 16)
-            end
-            Font.draw(pageLabel, 16, 32)
+            -- "FRIENDS" is back on this line alongside the counter now
+            -- that the version tag moved down onto the ONLINE/OFFLINE
+            -- line instead (see below) - "FRIENDS 1/3" is only 11 chars
+            -- (worst realistic case "FRIENDS 99/99" is 13), comfortably
+            -- under the 16-char budget now that this line isn't also
+            -- carrying a version tag. Dropped briefly in an earlier
+            -- round specifically because "FRIENDS 1/3 (YELLOW)" would
+            -- have overflowed - that reason no longer applies once the
+            -- version moved elsewhere, so the title text is restored.
+            Font.draw("FRIENDS " .. (self.page) .. "/" .. #ids, 16, 8)
+            -- This screen is genuinely at its 144px limit (18 rows,
+            -- same real box every screen in this file uses) - moving the
+            -- counter up here only frees ONE row (8px), not room for a
+            -- generically taller layout. name/id keep their original
+            -- spacing below (40/48) since that was never what was
+            -- reported as squashed - the actual complaint was
+            -- specifically the GAP between the last data row ("N HR
+            -- AGO") and the first hint row, which used to be only 8px
+            -- (104 -> 112). The one reclaimed row goes exactly there
+            -- instead: ago stays at 104, but the hint block now starts
+            -- at 120 instead of 112, giving that specific gap real
+            -- clearance. This is why A:DETAIL and LEFT/RIGHT:PAGE are
+            -- now combined onto one line below - keeping all 3 hint
+            -- lines separate AND adding this clearance would have
+            -- overflowed the box; combining two of them was the only way
+            -- to free a full row for where the complaint actually was.
             Font.draw((f.name or "?"):sub(1, 16), 16, 40)
             -- friends.php already returns trainer_id (zero-padded, same as
-            -- everywhere else it's shown) - it just wasn't drawn here
-            -- before. There WAS spare vertical space on this screen (a
-            -- 32px/4-row gap between the last data line and the bottom
-            -- hint row, unlike every other screen in this file which is
-            -- genuinely at its margin limit), confirmed by re-checking the
-            -- real y-positions already in use before adding this.
+            -- everywhere else it's shown).
             Font.draw("ID   " .. (f.trainer_id or "-----"), 16, 48)
-            Font.draw(isOnline and "ONLINE" or "OFFLINE", 16, 56)
+            -- Version tag now lives HERE, next to ONLINE, not on the page
+            -- counter line - "ONLINE (YELLOW)" is 15 chars at the longest
+            -- real version name, comfortably under the 16-char budget
+            -- (checked by hand: RED=12, BLUE=13, YELLOW=15, GOLD=13).
+            -- Still only shown while this specific entry is ONLINE -
+            -- offline, no version at all, regardless of how many
+            -- versions this friend has (per earlier direct feedback:
+            -- "when they are online, it should show the version they are
+            -- playing, simple, offline, no version at all").
+            if isOnline then
+              Font.draw(("ONLINE (" .. (f.game_version or "UNKNOWN") .. ")"):sub(1, 16), 16, 56)
+            else
+              Font.draw("OFFLINE", 16, 56)
+            end
             if f.map_id then
               Font.draw(friendlyMapName(f.map_id):sub(1, 16), 16, 72)
               Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 88)
               Font.draw(ago, 16, 104)
-              -- Version is now real (see resolveGameVersion) - shown on
-              -- the page-counter line above instead of a dedicated row
-              -- here (see comment above pageLabel) since this screen has
-              -- no spare row left for it.
             else
               Font.draw("NEVER SEEN YET", 16, 72)
             end
           end
-          -- Real navigation hint, not left off for lack of room this time -
-          -- this screen happens to have spare vertical space (see above),
-          -- unlike most others in this file which are genuinely at their
-          -- margin limit. LEFT/RIGHT hint only shown with >1 friend, since
-          -- paging does nothing with 0 or 1.
-          -- A:DETAIL only shown with >=1 friend (nothing to open with
-          -- none); LEFT/RIGHT:PAGE only with >1, same as before.
-          if #ids > 0 then Font.draw("A:DETAIL", 16, 112) end
-          if #ids > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, 120) end
+          -- A:DETAIL and LEFT/RIGHT:PAGE combined onto ONE hint line
+          -- ("A:DETAIL LR:PAGE", exactly 16 chars) instead of two
+          -- separate lines - see the long comment above for why: this
+          -- screen has no spare row left to add real clearance above the
+          -- hint block AND keep 3 separate hint lines, so two were
+          -- merged to free the row that clearance needed. Shown only
+          -- with >=1 friend (nothing to open/page with none).
+          -- LEFT/RIGHT:PAGE part only actually applies with >1 friend,
+          -- but it's cheap/harmless to show "LR:PAGE" even with exactly
+          -- 1 friend (pressing it just does nothing) - simpler than
+          -- drawing two different variants of this merged line.
+          if #ids > 0 then Font.draw("A:DETAIL LR:PAGE", 16, 120) end
           Font.draw("B:BACK SL:REMOVE", 16, 128)
         end
         return self
