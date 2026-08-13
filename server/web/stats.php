@@ -4,7 +4,13 @@
 // (account_id, game_version), never trusts a caller-supplied account_id.
 //
 // POST: token, [game_version], [badges, pokedex_seen, pokedex_caught,
-//        league_wins, money], [activity]
+//        league_wins, money, play_seconds, party], [activity]
+//
+// party is main.lua's encodePartySnapshot() output - an opaque delimited
+// string (see schema.sql's comment on friend_stats.party for the exact
+// format). Never parsed here, only passed through to the party column
+// as-is; substr-capped defensively same as activity, in case a mod-side
+// bug ever sends something longer than the column's measured worst case.
 //
 // activity is TWO display lines joined by a literal "\n" (e.g.
 // "CAUGHT LVL 25\nBLASTOISE" - see main.lua's queueCatchActivity) - NOT
@@ -32,7 +38,8 @@ $version = strtoupper(trim($_POST['game_version'] ?? 'UNKNOWN'));
 if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'UNKNOWN'], true)) $version = 'UNKNOWN';
 
 $hasStats = isset($_POST['badges']) || isset($_POST['pokedex_seen'])
-    || isset($_POST['pokedex_caught']) || isset($_POST['league_wins']) || isset($_POST['money']);
+    || isset($_POST['pokedex_caught']) || isset($_POST['league_wins']) || isset($_POST['money'])
+    || isset($_POST['play_seconds']) || isset($_POST['party']);
 $activity = rtrim($_POST['activity'] ?? '', " \t\0\x0B");
 
 if (!$hasStats && $activity === '') {
@@ -49,15 +56,20 @@ try {
     $pdo = silphnet_db();
 
     if ($hasStats) {
+        // party is capped to the party column's real size (512), not
+        // trimmed/altered otherwise - it's an opaque string as far as
+        // this endpoint is concerned (see comment above $hasStats).
+        $party = substr((string)($_POST['party'] ?? ''), 0, 512);
+
         $stmt = $pdo->prepare(
             'INSERT INTO friend_stats
-               (account_id, game_version, badges, pokedex_seen, pokedex_caught, league_wins, money, updated_at)
+               (account_id, game_version, badges, pokedex_seen, pokedex_caught, league_wins, money, play_seconds, party, updated_at)
              VALUES
-               (:account_id, :version, :badges, :seen, :caught, :wins, :money, NOW())
+               (:account_id, :version, :badges, :seen, :caught, :wins, :money, :play_seconds, :party, NOW())
              ON DUPLICATE KEY UPDATE
                badges = VALUES(badges), pokedex_seen = VALUES(pokedex_seen),
                pokedex_caught = VALUES(pokedex_caught), league_wins = VALUES(league_wins),
-               money = VALUES(money), updated_at = NOW()'
+               money = VALUES(money), play_seconds = VALUES(play_seconds), party = VALUES(party), updated_at = NOW()'
         );
         $stmt->execute([
             ':account_id' => $account['account_id'], ':version' => $version,
@@ -66,6 +78,8 @@ try {
             ':caught' => (int)($_POST['pokedex_caught'] ?? 0),
             ':wins' => (int)($_POST['league_wins'] ?? 0),
             ':money' => (int)($_POST['money'] ?? 0),
+            ':play_seconds' => (int)($_POST['play_seconds'] ?? 0),
+            ':party' => $party,
         ]);
     }
 

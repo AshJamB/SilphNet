@@ -649,6 +649,102 @@ return function(mod)
   -- see research/gen1-save-format-findings.md for how each field was
   -- confirmed. playTime isn't read here (not shown on the detail screen),
   -- but pokedex/hallOfFame/money/badges all are.
+  -- save.playTime has TWO possible shapes, per research/gen1-save-format-
+  -- findings.md: a plain seconds count (this engine's own Gen 1 saves),
+  -- OR a { hours, minutes, seconds, frames } table (their Gen 2/Gold
+  -- saves) - the engine's own code checks type(pt) == "table" before
+  -- deciding how to read it, and this does the same rather than assuming
+  -- one shape. Normalized to a single total-seconds integer here (not
+  -- uploaded as a table) so friend_stats can store it as one plain
+  -- column and every consumer (this function's caller, stats.php,
+  -- SilphNetFriendDetail's draw) only ever deals with one shape. Frames
+  -- are dropped (sub-second precision isn't meaningful to show a
+  -- friend) rather than rounded into seconds, to avoid ever
+  -- overstating play time by a fraction.
+  local function readPlaySeconds()
+    local pt = game and game.save and game.save.playTime
+    if type(pt) == "table" then
+      return (tonumber(pt.hours) or 0) * 3600 + (tonumber(pt.minutes) or 0) * 60 + (tonumber(pt.seconds) or 0)
+    end
+    return tonumber(pt) or 0
+  end
+
+  -- Encodes up to 6 party mons into ONE delimited string, following this
+  -- project's established "no JSON library available" convention (same
+  -- reasoning as activity's "\n"-joined two-line messages) rather than a
+  -- JSON-shaped payload. Per-mon fields are comma-joined; mons themselves
+  -- are semicolon-joined; a mon's moves are pipe-joined (a mon can have
+  -- fewer than 4 moves, so this can't just be a fixed-count comma slot).
+  -- Field order per mon: SPECIES,LEVEL,HP,MAXHP,MOVES - e.g.
+  -- "BLASTOISE,64,145,168,HYDRO PUMP|BITE|SURF|ICE BEAM".
+  --
+  -- Field names confirmed directly from engine source (src/pokemon/
+  -- Stats.lua, src/core/SaveData.lua), not guessed by analogy (this
+  -- project has been burned by that before - see readStatsSnapshot's
+  -- money comment): mon.hp is CURRENT hp (a top-level field, clamped to
+  -- mon.stats.hp if stale/missing), mon.stats.hp is the CALCULATED MAX hp
+  -- - there is no separate mon.maxHp field. mon.species and each
+  -- mon.moves[i] (or mon.moves[i].id, if a mon happens to use the
+  -- {id,pp} move-slot shape rather than a bare id - both are handled
+  -- here) are already-resolved string ids, same as everywhere else in
+  -- this file, so no lookup table is needed to turn either into display
+  -- text.
+  --
+  -- Commas/semicolons/pipes can't appear in any real species or move
+  -- name (all-caps, spaces and hyphens only, e.g. "DOUBLE-EDGE",
+  -- "HYPER BEAM"), so none of these delimiters risk colliding with real
+  -- field content - no escaping needed.
+  local function encodePartySnapshot()
+    local save = game and game.save
+    if not save or type(save.party) ~= "table" then return "" end
+    local out = {}
+    for i, mon in ipairs(save.party) do
+      if i > 6 then break end   -- real games cap parties at 6; defensive, not expected to ever trigger
+      local species = tostring(mon.species or "?"):upper()
+      local level = tonumber(mon.level) or 0
+      local maxHp = (type(mon.stats) == "table" and tonumber(mon.stats.hp)) or 0
+      local hp = tonumber(mon.hp)
+      if not hp then hp = maxHp end   -- mirrors Stats.ensure's own clamp-to-max fallback for a missing/stale value
+      local moveNames = {}
+      if type(mon.moves) == "table" then
+        for _, mv in ipairs(mon.moves) do
+          local id = (type(mv) == "table") and mv.id or mv
+          if id then moveNames[#moveNames + 1] = tostring(id):upper() end
+        end
+      end
+      out[#out + 1] = table.concat({
+        species, tostring(level), tostring(hp), tostring(maxHp), table.concat(moveNames, "|"),
+      }, ",")
+    end
+    return table.concat(out, ";")
+  end
+
+  -- Decodes encodePartySnapshot's string format back into an array of
+  -- { species, level, hp, maxHp, moves = {...} } - used client-side when
+  -- drawing a FRIEND's party (the string this function receives comes
+  -- back from friend_detail.php exactly as encodePartySnapshot produced
+  -- it, unmodified server-side - see stats.php/friend_detail.php).
+  local function decodePartySnapshot(str)
+    local out = {}
+    if type(str) ~= "string" or str == "" then return out end
+    for monStr in string.gmatch(str, "([^;]+)") do
+      local species, level, hp, maxHp, movesStr = string.match(monStr, "^([^,]*),([^,]*),([^,]*),([^,]*),(.*)$")
+      if species then
+        local moves = {}
+        for mv in string.gmatch(movesStr or "", "([^|]+)") do moves[#moves + 1] = mv end
+        out[#out + 1] = {
+          species = species, level = tonumber(level) or 0,
+          hp = tonumber(hp) or 0, maxHp = tonumber(maxHp) or 0, moves = moves,
+        }
+      end
+    end
+    return out
+  end
+
+  -- Reads everything the stats snapshot needs from game.save directly -
+  -- see research/gen1-save-format-findings.md for how each field was
+  -- confirmed. playTime isn't read here (not shown on the detail screen),
+  -- but pokedex/hallOfFame/money/badges all are.
   local function readStatsSnapshot()
     local save = game and game.save
     if not save then return nil end
@@ -673,6 +769,8 @@ return function(mod)
       -- (falling back to 0) for every real player - caught before
       -- shipping by checking the actual source rather than assuming.
       money = tonumber(save.money) or 0,
+      playSeconds = readPlaySeconds(),
+      party = encodePartySnapshot(),
     }
   end
 
@@ -785,6 +883,8 @@ return function(mod)
       fields.pokedex_caught = statsFields.pokedexCaught
       fields.league_wins = statsFields.leagueWins
       fields.money = statsFields.money
+      fields.play_seconds = statsFields.playSeconds
+      fields.party = statsFields.party
     end
     if activity then fields.activity = activity end
     statsUploadBusy = true
@@ -936,6 +1036,18 @@ return function(mod)
     if secs < 60 then return secs .. "S AGO" end
     if secs < 3600 then return math.floor(secs / 60) .. " MIN AGO" end
     return math.floor(secs / 3600) .. " HR AGO"
+  end
+
+  -- Formats a total-seconds play time as "TIME <h>H <m>M" - checked by
+  -- hand against extreme values (999999 seconds = "TIME 277H 46M", 13
+  -- chars) to confirm this stays under the 16-char budget even at play
+  -- times far beyond what's realistic, not just typical ones.
+  local function playTimeText(totalSeconds)
+    local secs = tonumber(totalSeconds) or 0
+    if secs < 0 then secs = 0 end
+    local h = math.floor(secs / 3600)
+    local m = math.floor((secs % 3600) / 60)
+    return "TIME " .. h .. "H " .. m .. "M"
   end
 
   -- "SN" here, not "SILPHNET" - reported on a real device running a UI
@@ -1386,17 +1498,22 @@ return function(mod)
     mod.content.screens:register("SilphNetFriendDetail", {
       new = function(g)
         local Font = mod.ui.Font
-        local self = { game = g, isOpaque = true, slot = 1 }
-        -- Builds the flat A-press cycle from friendDetail.versions: two
-        -- slots per version (STATS, then ACTIVITY), in whatever order
-        -- friend_detail.php returned versions (already sorted
-        -- alphabetically server-side). A version with neither stats nor
-        -- activity was already excluded server-side (see friend_detail.php),
-        -- so every version reaching this point gets both its slots -
-        -- "NO STATS YET"/"NO ACTIVITY YET" still covers the case where a
-        -- version has ONE of the two but not both. Recomputed fresh each
-        -- call rather than cached on self, since friendDetail can change
-        -- (a fresh fetch lands) without this screen being re-created.
+        local self = { game = g, isOpaque = true, slot = 1, partyIndex = 1 }
+        -- Builds the flat A-press cycle from friendDetail.versions: THREE
+        -- slots per version now (STATS, then PARTY, then ACTIVITY), in
+        -- whatever order friend_detail.php returned versions (already
+        -- sorted alphabetically server-side). A version with neither
+        -- stats nor activity was already excluded server-side (see
+        -- friend_detail.php), so every version reaching this point gets
+        -- all three of its slots - "NO STATS YET"/"NO ACTIVITY YET"/
+        -- "NO PARTY DATA" still cover the case where a version has some
+        -- but not all of the three. PARTY rides the same "stats" upload
+        -- (see readStatsSnapshot's party field) rather than being its own
+        -- separate slot source, so it's driven off v.stats.party here,
+        -- not a fourth top-level friendDetail field. Recomputed fresh
+        -- each call rather than cached on self, since friendDetail can
+        -- change (a fresh fetch lands) without this screen being
+        -- re-created.
         local function slots()
           local out = {}
           for _, v in ipairs((friendDetail and friendDetail.versions) or {}) do
@@ -1406,6 +1523,7 @@ return function(mod)
             -- version entry, not a shared/looked-up reference, so
             -- draw() below never has to re-match version strings.
             out[#out + 1] = { kind = "STATS", version = v.game_version, stats = v.stats, activity = v.activity }
+            out[#out + 1] = { kind = "PARTY", version = v.game_version, stats = v.stats, activity = v.activity }
             out[#out + 1] = { kind = "ACTIVITY", version = v.game_version, stats = v.stats, activity = v.activity }
           end
           return out
@@ -1431,7 +1549,38 @@ return function(mod)
           -- screen worked before this change.
           if input:wasPressed("a") then
             local s = slots()
-            if #s > 0 then self.slot = (self.slot % #s) + 1 end
+            if #s > 0 then
+              self.slot = (self.slot % #s) + 1
+              -- Sub-paging within a friend's party (which mon of up to
+              -- 6 is showing) is independent of the main A-press cycle -
+              -- reset back to the first mon every time A moves onto a
+              -- NEW slot (whether that's this same friend's PARTY page
+              -- on a different version, or landing back on PARTY after
+              -- cycling all the way around), so this never leaves a
+              -- stale "mon 4 of 6" position sitting behind a page that
+              -- looks freshly opened.
+              self.partyIndex = 1
+            end
+          end
+          -- LEFT/RIGHT only do anything while sitting on a PARTY slot -
+          -- paging between this friend's individual party mons, one per
+          -- screen (per direct feedback: "one mon per screen, paged is
+          -- the best"). Distinct axis from A's STATS/PARTY/ACTIVITY
+          -- cycle, same convention SilphNetFriends already uses (A for
+          -- one axis, LEFT/RIGHT for a different, narrower one).
+          local s = slots()
+          local cur = (#s > 0 and self.slot <= #s) and s[self.slot] or nil
+          if cur and cur.kind == "PARTY" then
+            local partyStr = cur.stats and cur.stats.party
+            local mons = decodePartySnapshot(partyStr)
+            if #mons > 0 then
+              if input:wasPressed("left") then
+                self.partyIndex = self.partyIndex - 1
+                if self.partyIndex < 1 then self.partyIndex = #mons end
+              elseif input:wasPressed("right") then
+                self.partyIndex = (self.partyIndex % #mons) + 1
+              end
+            end
           end
           if input:wasPressed("b") then
             pendingFriendDetail = nil
@@ -1441,6 +1590,13 @@ return function(mod)
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
           local name = (pendingFriendDetail and pendingFriendDetail.name or "?"):sub(1, 16)
+          -- Set below, only when currently sitting on a PARTY slot with
+          -- more than one real mon to page through - read by the hint
+          -- line at the very bottom of this function. Declared here
+          -- (rather than re-deriving from slots()/self.slot a second
+          -- time down there) so the hint line doesn't need its own
+          -- redundant slots() call and version of this same check.
+          local showsPartyPaging = false
           if friendDetailState == "loading" then
             Font.draw(name, 16, 8)
             Font.draw("LOADING...", 16, 40)
@@ -1501,6 +1657,65 @@ return function(mod)
                   -- 999999) - "MONEY  " (7 chars) + 6 digits = 13,
                   -- comfortably under 16 even at the maximum.
                   Font.draw("MONEY  " .. tostring(tonumber(st.money) or 0), 16, 96)
+                  -- Time played - the one spare row this page had left
+                  -- (y=112, between MONEY and the old hint line) before
+                  -- the hint line moved down to y=120 to make room (see
+                  -- below). Requested directly ("I wanted to add TIME
+                  -- PLAYED, but I think we missed it" - save.playTime was
+                  -- confirmed readable in the original save-format
+                  -- research but never actually wired into the stats
+                  -- upload/schema/screen until now).
+                  Font.draw(playTimeText(st.play_seconds), 16, 112)
+                end
+              elseif cur.kind == "PARTY" then
+                -- One mon per screen, paged with LEFT/RIGHT (see
+                -- self:update's partyIndex handling above) - per direct
+                -- feedback ("one mon per screen, paged is the best"),
+                -- not a compact truncated list. No sprite - the mod API
+                -- has no documented way to draw a species sprite outside
+                -- the overworld NPC system (mod.world:spawnNpc), only
+                -- text via Font.draw/drawBox, confirmed by checking the
+                -- wiki's Reference-Mod-Object page directly rather than
+                -- guessing a plausible-sounding call - so this stays
+                -- text-only, same as every other screen in this file.
+                local mons = decodePartySnapshot(cur.stats and cur.stats.party)
+                showsPartyPaging = #mons > 1
+                if #mons == 0 then
+                  Font.draw("NO PARTY DATA", 16, 32)
+                  Font.draw("(NOT UPLOADED", 16, 40)
+                  Font.draw("BY THEM YET)", 16, 48)
+                else
+                  if self.partyIndex > #mons then self.partyIndex = 1 end
+                  local mon = mons[self.partyIndex]
+                  -- Version line (already drawn above, shared with
+                  -- STATS/ACTIVITY) gets "n/total" appended rather than
+                  -- its own extra row - this screen has one row less of
+                  -- headroom than STATS/ACTIVITY once 4 move lines are
+                  -- accounted for (32 through 112 = 6 rows exactly:
+                  -- species+level, HP, then 4 moves), so the version
+                  -- line is overwritten here with the combined form
+                  -- instead of adding a 7th row. "BLUE 1/6" style,
+                  -- comfortably under 16 chars even at the max (a 2-char
+                  -- version name would be unusual, but even "YELLOW 6/6"
+                  -- is only 10 chars).
+                  Font.draw((cur.version .. " " .. self.partyIndex .. "/" .. #mons):sub(1, 16), 16, 16)
+                  -- Species + level, one line - longest real Gen 1
+                  -- species name (TENTACRUEL, 10 chars) + " LV" + up to
+                  -- 3 digits comfortably fits 16 chars (10+3+3=16 at the
+                  -- absolute worst case, checked by hand, not assumed).
+                  Font.draw((mon.species .. " LV" .. mon.level):sub(1, 16), 16, 32)
+                  Font.draw("HP " .. mon.hp .. "/" .. mon.maxHp, 16, 48)
+                  -- Up to 4 moves, one per line (y=64 to y=112, before
+                  -- the hint line at y=120) - the longest real Gen 1
+                  -- move names (e.g. "DOUBLE-EDGE", "SOLARBEAM") are
+                  -- comfortably under 16 chars on their own line without
+                  -- truncation; :sub(1,16) here is purely defensive, not
+                  -- expected to ever actually cut a real move name short.
+                  for i = 1, 4 do
+                    if mon.moves[i] then
+                      Font.draw(mon.moves[i]:sub(1, 16), 16, 64 + (i - 1) * 16)
+                    end
+                  end
                 end
               else
                 local act = cur.activity
@@ -1543,11 +1758,23 @@ return function(mod)
               end
             end
           end
+          -- Hint line moved down from y=112 to y=120 - that row is now
+          -- TIME PLAYED's spot on the STATS page (see above). Still one
+          -- clear line of margin above the box's 144px bottom edge, same
+          -- rule every screen in this file follows.
+          --
+          -- Only the PARTY page (with more than one real mon to page
+          -- through) adds "LR:MON" to the hint and a second hint row -
+          -- STATS/ACTIVITY/NO-DATA cases (and a single-mon PARTY page,
+          -- which has nothing to page between) have no LEFT/RIGHT
+          -- behavior to advertise, so their hint stays exactly as it
+          -- was before this page existed.
           if friendDetailState == "idle" then
-            Font.draw("A:NEXT B:BACK", 16, 112)
+            Font.draw(showsPartyPaging and "LR:MON A:NEXT" or "A:NEXT B:BACK", 16, 120)
           else
-            Font.draw("B:BACK", 16, 112)
+            Font.draw("B:BACK", 16, 120)
           end
+          if showsPartyPaging then Font.draw("B:BACK", 16, 128) end
         end
         return self
       end,
@@ -1924,7 +2151,25 @@ return function(mod)
               local obj = string.match(str, '"' .. key .. '"%s*:%s*(%{[^{}]-%})')
               if not obj then return nil end
               local rec = {}
-              for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*"?([^",}]*)"?') do rec[k] = v end
+              -- Two separate gmatch passes, not one combined pattern -
+              -- the "party" field's value can itself contain literal
+              -- commas ("BLASTOISE,64,145,168,..." - see
+              -- encodePartySnapshot), which the old single pattern
+              -- (stopping a quoted value at the first "," it saw) would
+              -- have silently truncated party at its first comma. A
+              -- quoted JSON string value only ever really ends at its
+              -- closing quote, so this now matches quoted values by
+              -- stopping there instead - the same distinction jsonField
+              -- already draws between its quoted-string and bare-number
+              -- patterns, just applied inside a nested object here too.
+              -- Quoted values are tried first (a field can't match both
+              -- patterns for the same key, since a quoted value's first
+              -- char is `"`, which the bare-number pattern's %s*:%s*
+              -- lookahead won't accept).
+              for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*"([^"]*)"') do rec[k] = v end
+              for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*(-?%d+%.?%d*)[,}]') do
+                if rec[k] == nil then rec[k] = v end
+              end
               return rec
             end
             local presence = nestedObj(body, "presence")
@@ -2098,26 +2343,26 @@ return function(mod)
       -- it regardless of what other mods insert between them.
       mod.ui.insertBefore(items, "QUIT", { label = "SN NEARBY",
         onSelect = function() mod.ui.push(g, "SilphNetNearby") end })
-    end)
-    return nextFn(g, items)
-  end)
-
-  -- Credits/about, added to the mod manager's OPTIONS screen rather than
-  -- the in-game GB status screen - that screen is already at its practical
-  -- limit on the same conservative 16-char / one-clear-line-of-margin
-  -- budget every other line here has to respect (see SilphNetStatus's
-  -- draw() comments), so a dedicated credits row would have meant cutting
-  -- something else to make room. ui.options.rows follows the exact same
-  -- anchored-insert pattern as ui.start_menu.items (Cookbook R31/R34), so
-  -- this is a real navigable row in the manager's per-mod options list,
-  -- not a fake settings field - onSelect pushes a real screen the same way
-  -- the Start-menu row above does.
-  mod.hooks:wrap("ui.options.rows", function(nextFn, g, rows)
-    pcall(function()
-      mod.ui.insertBefore(rows, "RESET DEFAULTS", { label = "ABOUT SILPHNET",
+      -- Third Start Menu row for About - moved here from the mod
+      -- manager's OPTIONS screen (see removed ui.options.rows hook
+      -- below this comment used to sit above), which is where an
+      -- earlier version of this put it on the reasoning that the
+      -- in-game GB screen was already at its 16-char/144px budget.
+      -- Reported on-device as a real bug, not a design tradeoff:
+      -- selecting "ABOUT SILPHNET" from the options screen closed the
+      -- Start Menu/options UI entirely rather than opening the About
+      -- screen - mod.ui.push(g, "SilphNetAbout") pushing a genuine
+      -- gameplay-style screen onto a stack the mod manager's own
+      -- options UI wasn't necessarily expecting to receive a push from,
+      -- unlike the Start Menu (an established, already-working push
+      -- site for SilphNetStatus/SilphNetNearby above). Moving About to
+      -- its own Start Menu row - the exact same site the two rows above
+      -- already use successfully - sidesteps that entirely rather than
+      -- trying to debug the options screen's own push handling.
+      mod.ui.insertBefore(items, "QUIT", { label = "SN ABOUT",
         onSelect = function() mod.ui.push(g, "SilphNetAbout") end })
     end)
-    return nextFn(g, rows)
+    return nextFn(g, items)
   end)
 
   pcall(function()
@@ -2130,20 +2375,46 @@ return function(mod)
         end
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
+          -- Uppercase throughout, not each link's real casing - Gen 1's
+          -- GB font is uppercase-only in most contexts (menus, most
+          -- dialogue; a few special text boxes support lowercase in the
+          -- real game), and this couldn't be verified on-device here, so
+          -- this plays it safe rather than risk missing/garbled
+          -- lowercase glyphs. << VERIFY >> whether mod.ui.Font.draw
+          -- actually supports lowercase - if confirmed, these could go
+          -- back to their real casing (ashjamgram, ashjam, etc.).
+          --
+          -- GitHub/Instagram/TikTok added directly on request ("Include
+          -- all the details you have there, and github and socials
+          -- aswell") - each shown as a short label + the real handle,
+          -- same left-label style already used elsewhere in this file.
+          -- No Discord row - not created yet as of this addition; add
+          -- one here once it exists rather than showing a handle that
+          -- doesn't resolve to anything.
+          --
+          -- GitHub shown as just the handle ("GH ASHJAMB"), not the full
+          -- "AshJamB/SilphNet" repo path - the full path is exactly 16
+          -- chars (fits with zero margin), but using it here would have
+          -- meant dropping "THANKS FOR PLAYING!" to stay within the
+          -- box's 144px limit, and keeping that line (already part of
+          -- this screen before this change) mattered more than spelling
+          -- out the repo name in full - the handle alone is enough to
+          -- find the right GitHub profile.
           Font.draw("- SILPHNET -", 16, 8)
-          Font.draw("BY ASH BRITTAIN", 16, 32)
-          Font.draw("(ASHJAM)", 16, 40)
-          -- Uppercase, not the URL's real casing - Gen 1's GB font is
-          -- uppercase-only in most contexts (menus, most dialogue; a few
-          -- special text boxes support lowercase in the real game), and
-          -- this couldn't be verified on-device here, so this plays it
-          -- safe rather than risk missing/garbled lowercase glyphs.
-          -- << VERIFY >> whether mod.ui.Font.draw actually supports
-          -- lowercase - if confirmed, this could go back to real casing.
-          Font.draw("ASH.JAMTV.CO.UK", 16, 56)
-          Font.draw("THANKS FOR", 16, 80)
-          Font.draw("PLAYING!", 16, 88)
-          Font.draw("V" .. tostring(mod.version or "?"), 16, 112)
+          Font.draw("ASH BRITTAIN", 16, 24)
+          Font.draw("(ASHJAM)", 16, 32)
+          Font.draw("ASH.JAMTV.CO.UK", 16, 48)
+          Font.draw("GH ASHJAMB", 16, 64)
+          Font.draw("IG @ASHJAMGRAM", 16, 80)
+          Font.draw("TT @ASHJAM", 16, 96)
+          -- :sub(1,16) here is a real, not purely defensive, safeguard -
+          -- unlike most other :sub(1,16) calls in this file, a future
+          -- version number genuinely could push this line past 16 chars
+          -- (e.g. "PLAYING! V10.10.10" is 18 chars), where every other
+          -- capped line in this file is only ever at risk from unusually
+          -- long real-world input, not its own version string growing.
+          Font.draw("THANKS FOR", 16, 112)
+          Font.draw(("PLAYING! V" .. tostring(mod.version or "?")):sub(1, 16), 16, 120)
           Font.draw("B:BACK", 16, 128)
         end
         return self

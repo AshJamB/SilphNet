@@ -54,7 +54,7 @@ try {
     if (!$stmt->fetch()) silphnet_error('not an accepted friend', 403);
 
     $stmt = $pdo->prepare(
-        'SELECT game_version, badges, pokedex_seen, pokedex_caught, league_wins, money, updated_at
+        'SELECT game_version, badges, pokedex_seen, pokedex_caught, league_wins, money, play_seconds, party, updated_at
          FROM friend_stats WHERE account_id = :friend_id'
     );
     $stmt->execute([':friend_id' => $friendId]);

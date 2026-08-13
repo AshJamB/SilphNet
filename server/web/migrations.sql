@@ -109,3 +109,46 @@ DELETE FROM sessions WHERE last_used < NOW() - INTERVAL 90 DAY;
 -- itself can't identify, may legitimately stay UNKNOWN) as more players
 -- update and play at least once.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-14: friend_stats.play_seconds
+-- Needed if your friend_stats table was created BEFORE this column
+-- existed in schema.sql. If you're setting up SilphNet fresh, schema.sql
+-- already creates this column and you can skip this block.
+-- ---------------------------------------------------------------------------
+
+-- Step 1: check if the column is missing before running step 2 - if this
+-- returns a row, play_seconds already exists and you should skip this
+-- whole block.
+--
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema = DATABASE() AND table_name = 'friend_stats' AND column_name = 'play_seconds';
+
+-- Step 2: add the column, defaulted to 0 for existing rows - they'll get
+-- a real value the next time that account's client uploads a stats
+-- snapshot (~every 3 minutes of play, same as any other stats field).
+ALTER TABLE friend_stats ADD COLUMN play_seconds INT UNSIGNED NOT NULL DEFAULT 0 AFTER money;
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-13: friend_stats.party
+-- Needed if your friend_stats table was created BEFORE this column
+-- existed in schema.sql. If you're setting up SilphNet fresh, schema.sql
+-- already creates this column and you can skip this block.
+-- ---------------------------------------------------------------------------
+
+-- Step 1: check if the column is missing before running step 2 - if this
+-- returns a row, party already exists and you should skip this whole
+-- block.
+--
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema = DATABASE() AND table_name = 'friend_stats' AND column_name = 'party';
+
+-- Step 2: add the column, defaulted to empty for existing rows - they'll
+-- get a real value the next time that account's client uploads a stats
+-- snapshot (~every 3 minutes of play, same as any other stats field).
+-- VARCHAR(512), not (255) - see schema.sql's comment above this same
+-- column for the measured (not guessed) worst-case size this was sized
+-- against.
+ALTER TABLE friend_stats ADD COLUMN party VARCHAR(512) NOT NULL DEFAULT '' AFTER play_seconds;
+-- ---------------------------------------------------------------------------

@@ -67,6 +67,31 @@ CREATE TABLE IF NOT EXISTS friends (
 -- separate "characters". league_wins is #save.hallOfFame entries, badges
 -- is derived client-side from save.inventory + constants.badges (see
 -- main.lua's countBadges() - Badges.count() itself isn't mod-accessible).
+-- play_seconds is a normalized TOTAL SECONDS count - save.playTime has
+-- two possible shapes engine-side (plain seconds, or an {hours,minutes,
+-- seconds,frames} table), both collapsed to one plain integer client-side
+-- (main.lua's readPlaySeconds()) so this column only ever has one shape
+-- to deal with.
+-- party is up to 6 mons encoded as ONE delimited string by main.lua's
+-- encodePartySnapshot() - "SPECIES,LEVEL,HP,MAXHP,MOVE1|MOVE2|MOVE3|MOVE4"
+-- per mon, semicolon-joined across mons - following this project's usual
+-- "no JSON library available" convention (same as friend_activity's
+-- "\n"-joined two-line messages) rather than a JSON payload. VARCHAR(255)
+-- comfortably covers the realistic worst case (6 mons, each with the
+-- longest real Gen 1 species name and 4 long move names, comes to well
+-- under 255 chars) with room to spare. Stored/returned completely opaque
+-- server-side - this column is never parsed in PHP, only passed through
+-- untouched (see stats.php/friend_detail.php); all encoding/decoding
+-- happens client-side in main.lua.
+--
+-- VARCHAR(512), not (255) - actually calculated (not guessed) against the
+-- real worst case: 6 mons, each with the longest real Gen 1 species name
+-- (TENTACRUEL, 10 chars) and 4 copies of the longest real move name
+-- (DOUBLE-EDGE, 11 chars) comes to 425 chars ("TENTACRUEL,100,714,714,
+-- DOUBLE-EDGE|DOUBLE-EDGE|DOUBLE-EDGE|DOUBLE-EDGE" x6, semicolon-joined) -
+-- confirmed by literally constructing that string and measuring it, not
+-- estimated by eye. 512 leaves real headroom above that measured worst
+-- case rather than cutting it close.
 CREATE TABLE IF NOT EXISTS friend_stats (
   account_id     VARCHAR(16) NOT NULL,
   game_version   VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN',
@@ -75,6 +100,8 @@ CREATE TABLE IF NOT EXISTS friend_stats (
   pokedex_caught SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   league_wins    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   money          INT UNSIGNED NOT NULL DEFAULT 0,
+  play_seconds   INT UNSIGNED NOT NULL DEFAULT 0,
+  party          VARCHAR(512) NOT NULL DEFAULT '',
   updated_at     DATETIME NOT NULL,
   PRIMARY KEY (account_id, game_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
