@@ -18,12 +18,41 @@
 -- several active saves (Red/Blue/Yellow) tracked as separate "characters",
 -- each with their own last-known position - see ping.php.
 
+-- email is OPTIONAL (nullable) - registering in-game never asks for one, so
+-- most accounts will have NULL here unless the player later sets one via
+-- account.php specifically to enable password recovery. Stored encrypted
+-- (AES-256-GCM, see email_crypto.php) rather than plain text - the raw
+-- ciphertext in this column is meaningless without EMAIL_ENCRYPTION_KEY
+-- (a secret defined in db.php, never committed to git), so a database
+-- dump alone doesn't expose anyone's real email address. This is
+-- reversible encryption, not one-way hashing like password_hash - the
+-- server has to be able to read the real address back out to actually
+-- send a recovery email to it, which a hash could never allow.
 CREATE TABLE IF NOT EXISTS accounts (
   account_id     VARCHAR(16) NOT NULL PRIMARY KEY,   -- e.g. 24275CB2, matches the old TCP account id style
   name           VARCHAR(16) NOT NULL UNIQUE,
   password_hash  VARCHAR(255) NOT NULL,               -- PHP password_hash() output (bcrypt) - one-way, never plaintext
   trainer_id     SMALLINT UNSIGNED NOT NULL UNIQUE,    -- 0-65535, displayed zero-padded to 5 digits (00000-65535) - same range as the real games' 16-bit trainer ID
+  email          VARBINARY(512) NULL,                  -- AES-256-GCM ciphertext (nonce+tag+ciphertext packed together by email_crypto.php), NULL if never set
   created_at     DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Password reset tokens, requested via request_password_reset.php and
+-- consumed via reset_password.php. One row per request - a new request
+-- doesn't overwrite an old unused one, so a stale link that was never
+-- clicked simply expires on its own (see expires_at) rather than needing
+-- active cleanup. used_at is set the moment a token is successfully
+-- consumed, so a reset link can only ever be used once even within its
+-- validity window - re-visiting the same link after a successful reset
+-- (e.g. clicking it twice, or an email client "pre-fetching" the link)
+-- correctly fails rather than silently resetting the password again.
+CREATE TABLE IF NOT EXISTS password_resets (
+  token       VARCHAR(64) NOT NULL PRIMARY KEY,   -- random token, same shape as sessions.token
+  account_id  VARCHAR(16) NOT NULL,
+  created_at  DATETIME NOT NULL,
+  expires_at  DATETIME NOT NULL,
+  used_at     DATETIME NULL,
+  INDEX idx_account (account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -133,4 +162,22 @@ CREATE TABLE IF NOT EXISTS friend_activity (
   message       VARCHAR(32) NOT NULL,
   created_at    DATETIME NOT NULL,
   PRIMARY KEY (account_id, game_version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- History of name/Trainer ID changes made via update_account.php - one row
+-- per field actually changed (a request that changes both name AND
+-- trainer_id in one go writes two rows here, not one combined row), so
+-- there's an audit trail if a rename/re-ID ever needs to be traced back
+-- (e.g. "who used to be Trainer ID 04815" or "when did this account's name
+-- change"). account_id is the account's own permanent id - never changes,
+-- so this table can always be traced back to one account regardless of how
+-- many times its name/trainer_id have changed since.
+CREATE TABLE IF NOT EXISTS account_history (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  account_id  VARCHAR(16) NOT NULL,
+  field       ENUM('name','trainer_id') NOT NULL,
+  old_value   VARCHAR(16) NOT NULL,
+  new_value   VARCHAR(16) NOT NULL,
+  changed_at  DATETIME NOT NULL,
+  INDEX idx_account (account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -17,6 +17,43 @@ define('DB_NAME', 'jamshark_silphnet');
 define('DB_USER', 'jamshark_silphnet');   // << EDIT ME if you used a different username
 define('DB_PASS', 'CHANGE-ME');           // << EDIT ME - set on the server only, never in git
 
+// -----------------------------------------------------------------------
+// Recovery email feature (set_email.php / request_password_reset.php /
+// reset_password.php) - optional. Leaving these as CHANGE-ME/blank is
+// fine; the feature just fails soft (mailer.php logs and returns false,
+// email_crypto.php's silphnet_email_key() errors clearly) rather than
+// doing anything unsafe, so you can ignore this whole block until you're
+// ready to actually wire up a real mailbox.
+// -----------------------------------------------------------------------
+
+// 64 hex characters = 32 raw bytes = a real AES-256 key. Generate a new
+// one with: php -r "echo bin2hex(random_bytes(32));"
+// This key encrypts every stored email address - losing it means every
+// already-stored email becomes permanently unreadable (accounts keep
+// working fine, they just silently have no recovery email anymore).
+// Changing it does NOT re-encrypt existing rows - do that migration
+// yourself if you ever need to rotate this key.
+define('EMAIL_ENCRYPTION_KEY', 'CHANGE-ME');   // << EDIT ME - 64 hex chars, keep secret, back it up
+
+// SMTP credentials for a real mailbox (Gmail, your own domain's mail
+// hosting via Verpex, or any SMTP provider) - used only to send password
+// reset emails. SMTP_SECURE should be PHPMailer::ENCRYPTION_STARTTLS
+// (the string 'tls') for port 587, or PHPMailer::ENCRYPTION_SMTPS
+// (the string 'ssl') for port 465 - check whichever your provider's own
+// setup instructions specify.
+//
+// Example below is filled in for a Verpex-hosted mailbox on port 465
+// (implicit TLS/SMTPS, hence 'ssl' not 'tls') - adjust host/port/secure
+// to match whatever your own provider's setup instructions say if
+// they differ.
+define('SMTP_HOST', 'mail.jamshark.co.uk');
+define('SMTP_PORT', 465);
+define('SMTP_SECURE', 'ssl');
+define('SMTP_USER', 'silphnet@jamshark.co.uk');   // usually the full mailbox address
+define('SMTP_PASS', 'CHANGE-ME');                 // << EDIT ME - the mailbox's real password, set on the server only, never in git
+define('SMTP_FROM_ADDRESS', 'silphnet@jamshark.co.uk');
+define('SMTP_FROM_NAME', 'SilphNet');
+
 function silphnet_db() {
     static $pdo = null;
     if ($pdo === null) {

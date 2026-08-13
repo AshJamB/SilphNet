@@ -9,9 +9,11 @@ accounts.json
 players_backup.json
 *.tmp
 
-# Real DB credentials — NEVER commit. Edit DB_PASS/DB_USER directly on the
-# server; keep db.php.example in git as the placeholder template instead.
+# Real DB credentials — NEVER commit. Edit DB_PASS/DB_USER (and, if used,
+# EMAIL_ENCRYPTION_KEY/SMTP_*) directly on the server; keep db.php.example
+# in git as the placeholder template instead.
 server/web/db.php
+server/web/api/db.php
 
 # Python
 __pycache__/

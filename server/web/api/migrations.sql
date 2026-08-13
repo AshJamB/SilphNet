@@ -182,3 +182,44 @@ ALTER TABLE friend_stats ADD COLUMN party VARCHAR(512) NOT NULL DEFAULT '' AFTER
 -- because the column vanished mid-use.
 ALTER TABLE presence DROP COLUMN name;
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-13: account_history (new table, not a column migration) - just
+-- re-run schema.sql, its CREATE TABLE IF NOT EXISTS will add this table
+-- without touching anything you already have. Nothing to ALTER here -
+-- listed in this file only so it's not missed by anyone skimming straight
+-- to migrations.sql for "what do I need to run for this version." Logs
+-- every name/Trainer ID change made via update_account.php going forward -
+-- it has no historical data for changes made before this table existed.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-13: accounts.email + password_resets (recovery email feature)
+-- Needed if your accounts table was created BEFORE the email column
+-- existed in schema.sql. If you're setting up SilphNet fresh, schema.sql
+-- already creates both and you can skip this block.
+--
+-- IMPORTANT: before running step 2 below, you must set EMAIL_ENCRYPTION_KEY
+-- in db.php (see db.php.example for the exact constant name/format) - the
+-- email column stores AES-256-GCM ciphertext, not plain text, and nothing
+-- reads/writes it correctly without that key defined.
+-- ---------------------------------------------------------------------------
+
+-- Step 1: check if the column is missing before running step 2 - if this
+-- returns a row, email already exists and you should skip step 2.
+--
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema = DATABASE() AND table_name = 'accounts' AND column_name = 'email';
+--
+-- (if information_schema access is denied on your host, as some shared
+-- cPanel MySQL users find, just try step 2 directly - MySQL itself will
+-- error harmlessly with "Duplicate column name" if it already exists)
+
+-- Step 2: add the column, nullable - every existing account simply has no
+-- recovery email set until its owner adds one via account.php.
+ALTER TABLE accounts ADD COLUMN email VARBINARY(512) NULL AFTER trainer_id;
+
+-- Step 3: password_resets is a brand new table, not a column addition -
+-- just re-run schema.sql, its CREATE TABLE IF NOT EXISTS will add it
+-- without touching anything else.
+-- ---------------------------------------------------------------------------

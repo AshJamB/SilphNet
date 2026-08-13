@@ -80,6 +80,13 @@ try {
     // will see the first request's write and correctly reject.
     $pdo->beginTransaction();
 
+    // Grab the pre-change values now, before anything is written, so the
+    // account_history rows below log what it actually changed FROM - not
+    // just what it changed to.
+    $before = $pdo->prepare('SELECT name, trainer_id FROM accounts WHERE account_id = :me');
+    $before->execute([':me' => $account['account_id']]);
+    $beforeRow = $before->fetch();
+
     if ($wantsName) {
         $check = $pdo->prepare('SELECT account_id FROM accounts WHERE name = :name AND account_id != :me FOR UPDATE');
         $check->execute([':name' => $newName, ':me' => $account['account_id']]);
@@ -102,6 +109,29 @@ try {
     if ($wantsName) { $sets[] = 'name = :name'; $params[':name'] = $newName; }
     if ($wantsTrainerId) { $sets[] = 'trainer_id = :tid'; $params[':tid'] = $newTrainerId; }
     $pdo->prepare('UPDATE accounts SET ' . implode(', ', $sets) . ' WHERE account_id = :me')->execute($params);
+
+    // One account_history row per field ACTUALLY changed - only when the
+    // new value differs from the old one (re-submitting your own current
+    // name, which update_account.php allows, doesn't log a no-op "changed
+    // from X to X" row). Logged inside this same transaction, so a row
+    // only ever exists here for a change that really committed.
+    $logStmt = $pdo->prepare(
+        'INSERT INTO account_history (account_id, field, old_value, new_value, changed_at)
+         VALUES (:id, :field, :old, :new, NOW())'
+    );
+    if ($wantsName && $newName !== $beforeRow['name']) {
+        $logStmt->execute([
+            ':id' => $account['account_id'], ':field' => 'name',
+            ':old' => $beforeRow['name'], ':new' => $newName,
+        ]);
+    }
+    if ($wantsTrainerId && $newTrainerId !== (int)$beforeRow['trainer_id']) {
+        $logStmt->execute([
+            ':id' => $account['account_id'], ':field' => 'trainer_id',
+            ':old' => str_pad($beforeRow['trainer_id'], 5, '0', STR_PAD_LEFT),
+            ':new' => str_pad($newTrainerId, 5, '0', STR_PAD_LEFT),
+        ]);
+    }
 
     $pdo->commit();
 

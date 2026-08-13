@@ -55,27 +55,37 @@ mod/silphnet/           the LÖVE mod (install this into the game's mods/ folder
   mod.card               manager detail card
 dist/silphnet.zip        the mod, zipped and ready to install
 server/
-  web/                   the PHP and MySQL API (all that's needed to host - no VPS, no persistent process)
-    schema.sql            run once in phpMyAdmin to create the tables
-    migrations.sql         column changes for an existing database (run only when a new version needs one)
-    db.php.example         DB connection template - copy to db.php and fill in real credentials there
-    index.php               public landing page (features, install steps, GitHub link, socials)
-    account.php             log in on the web to change your username or Trainer ID
-    register.php           create an account (name + password -> account_id + token)
-    login.php              log in with name + password -> account_id + token
-    login_token.php         re-authenticate with a cached token (no retyping)
-    check_name.php           live availability check for a candidate username (account.php)
-    check_trainer_id.php     live availability check for a candidate Trainer ID (account.php)
-    update_account.php       rename your username and/or reassign your Trainer ID (password-gated)
-    ping.php                report a last-known position (requires a token)
-    friends.php             fetch friends' last-known positions (requires a token)
-    add_friend.php           send a friend request by Trainer ID
-    accept_friend.php        accept an incoming friend request
-    remove_friend.php        remove an accepted friend (or decline/cancel a pending request)
-    pending_requests.php     list incoming friend requests awaiting your accept
-    online_count.php         count of everyone currently online, globally (not just friends)
-    online_by_version.php    everyone online, grouped by game version (RED/BLUE/YELLOW), with player lists
-    nearby.php               everyone else (friend or not) currently on a given map
+  web/                   the site root - upload this whole folder as-is
+    index.php              public landing page (features, install steps, GitHub link, socials)
+    account.php            log in on the web to manage your account (rename, Trainer ID, password, recovery email)
+    assets/                images used by index.php (logo, banner)
+    api/                  the PHP + MySQL gameplay API, kept separate from the public site above -
+                           everything the mod itself talks to lives here, at /api on your host
+      schema.sql             run once in phpMyAdmin to create the tables
+      migrations.sql         column changes for an existing database (run only when a new version needs one)
+      db.php.example         DB + SMTP + email-encryption connection template - copy to db.php and fill in real values there
+      register.php           create an account (name + password -> account_id + token)
+      login.php              log in with name + password -> account_id + token
+      login_token.php        re-authenticate with a cached token (no retyping)
+      check_name.php         live availability check for a candidate username (account.php)
+      check_trainer_id.php   live availability check for a candidate Trainer ID (account.php)
+      update_account.php     rename your username and/or reassign your Trainer ID (password-gated, logs old values to account_history)
+      change_password.php    change your password (requires your current password)
+      set_email.php          add/change your recovery email (password-gated; stored encrypted, see SECURITY.md)
+      request_password_reset.php   request a password-reset email (public - only works if a recovery email is on file)
+      reset_password.php     consume a password-reset link/token and set a new password
+      email_crypto.php        AES-256-GCM encrypt/decrypt helpers for the stored recovery email
+      mailer.php               thin wrapper around the vendored PHPMailer, sends the reset email
+      vendor/phpmailer/        vendored PHPMailer library (3 files, copied from the official release - no composer needed)
+      ping.php                report a last-known position (requires a token)
+      friends.php             fetch friends' last-known positions (requires a token)
+      add_friend.php           send a friend request by Trainer ID
+      accept_friend.php        accept an incoming friend request
+      remove_friend.php        remove an accepted friend (or decline/cancel a pending request)
+      pending_requests.php     list incoming friend requests awaiting your accept
+      online_count.php         count of everyone currently online, globally (not just friends)
+      online_by_version.php    everyone online, grouped by game version (RED/BLUE/YELLOW), with player lists
+      nearby.php               everyone else (friend or not) currently on a given map
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
 assets/                  images used in this README (banner, etc.)
@@ -566,19 +576,30 @@ fork the project and run their own instance instead.
 The backend is a handful of small PHP files plus a MySQL database - no VPS
 and no persistent process required, ordinary shared web hosting is enough:
 
-1. In phpMyAdmin, run `server/web/schema.sql` against the database to
-   create the `accounts`, `sessions`, `presence`, and `friends` tables.
-2. Upload everything in `server/web/` (including the `assets/` folder) to
-   the site root, except `db.php.example` - copy that one to `db.php`
-   first and fill in the real database credentials there before
-   uploading it. `index.php` becomes the site's homepage automatically
-   (most hosts serve `index.php` at the root by default); `account.php`
-   is reachable at `yoursite.com/account.php`.
-3. In `mod/silphnet/main.lua`, change `API_BASE` at the top to point at
-   the new site's URL, then rebuild `dist/silphnet.zip`.
+1. In phpMyAdmin, run `server/web/api/schema.sql` against the database to
+   create all the tables (`accounts`, `sessions`, `presence`, `friends`,
+   `friend_stats`, `friend_activity`, `account_history`,
+   `password_resets`).
+2. Upload `server/web/index.php`, `account.php`, and the `assets/` folder
+   to the site root - `index.php` becomes the site's homepage
+   automatically on most hosts; `account.php` is reachable at
+   `yoursite.com/account.php`.
+3. Upload everything in `server/web/api/` to an `api/` subfolder at the
+   site root, except `db.php.example` - copy that one to `db.php` first
+   and fill in the real database credentials (and, optionally,
+   `EMAIL_ENCRYPTION_KEY`/`SMTP_*` for the recovery-email feature - see
+   the comments in `db.php.example`) before uploading it. `account.php`'s
+   own `API_BASE` already points at `/api` to match.
+4. In `mod/silphnet/main.lua`, change `API_BASE` at the top to point at
+   the new site's `/api` URL, then rebuild `dist/silphnet.zip`.
 
 If a database column needs adding later (e.g. after pulling in a newer
-version of this mod), see `server/web/migrations.sql`.
+version of this mod), see `server/web/api/migrations.sql`.
+
+Recovery email (forgot-password) is entirely optional - the site works
+fine without ever configuring `EMAIL_ENCRYPTION_KEY`/`SMTP_*`; players
+just won't have a self-serve way to reset a forgotten password until you
+do. See `SECURITY.md` for how the stored email is encrypted.
 
 ## Notes
 
