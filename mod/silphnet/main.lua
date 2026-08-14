@@ -617,6 +617,7 @@ return function(mod)
   local nearbyBusy         = false
   local onlineByVersionBusy = false
   local statsUploadBusy     = false
+  local statsUploadActivitySent = nil   -- the activity string currently in flight, or nil - see fireStatsUpload/drainHttpResults
   local sinceStats = 0            -- separate, slower cycle than PRESENCE_INTERVAL - see STATS_INTERVAL
   local STATS_INTERVAL = 180.0    -- 3 min - badges/dex/money/league wins don't need 30s freshness
 
@@ -796,7 +797,20 @@ return function(mod)
   -- know or care that it's two lines - it's still just "the activity
   -- message" as far as the database and endpoint are concerned), split
   -- back into two lines only where it's drawn (SilphNetFriendDetail).
-  local pendingActivity = nil   -- "CAUGHT LVL 25\nBLASTOISE" or nil
+  -- A small FIFO queue, NOT a single overwritable slot - a single slot
+  -- had a real bug (caught during a live report of "one catch shows all
+  -- day, then several catches never appear"): if a second catch happened
+  -- before the first one's upload had finished (statsUploadBusy still
+  -- true - see pumpPresenceTimer), the single slot got silently
+  -- overwritten, permanently losing the first catch's activity with no
+  -- way to ever send it. A FIFO means a fast second catch waits its turn
+  -- instead of erasing the first. Capped at PENDING_ACTIVITY_MAX rather
+  -- than unbounded - a genuine catching frenzy (several catches within
+  -- one HTTP round-trip) can still lose the OLDEST entry once the queue
+  -- is full, but that's a deliberate, bounded worst case instead of the
+  -- previous unbounded "last one wins, always" behaviour.
+  local PENDING_ACTIVITY_MAX = 5
+  local pendingActivityQueue = {}   -- array of "CAUGHT LVL 25\nBLASTOISE" strings, oldest first
   local function queueCatchActivity(mon, species)
     local level = mon and tonumber(mon.level)
     local name = tostring(species or "?"):upper()
@@ -805,7 +819,11 @@ return function(mod)
     -- not one combined 32-char cap - a long species name can't borrow
     -- room from the level line or vice versa, since they're drawn on
     -- separate rows.
-    pendingActivity = line1:sub(1, 16) .. "\n" .. name:sub(1, 16)
+    local message = line1:sub(1, 16) .. "\n" .. name:sub(1, 16)
+    table.insert(pendingActivityQueue, message)
+    if #pendingActivityQueue > PENDING_ACTIVITY_MAX then
+      table.remove(pendingActivityQueue, 1)   -- drop the oldest, not the newest
+    end
   end
 
   -- Global online count (everyone, not just friends) and who's on the
@@ -909,6 +927,7 @@ return function(mod)
     end
     if activity then fields.activity = activity end
     statsUploadBusy = true
+    statsUploadActivitySent = activity   -- remembered so drainHttpResults knows what to pop on success
     httpPost("stats_upload", "/stats.php", fields)
   end
 
@@ -1771,15 +1790,25 @@ return function(mod)
                   -- absolute worst case, checked by hand, not assumed).
                   Font.draw((mon.species .. " LV" .. mon.level):sub(1, 16), 16, 32)
                   Font.draw("HP " .. mon.hp .. "/" .. mon.maxHp, 16, 48)
-                  -- Up to 4 moves, one per line (y=64 to y=112, before
-                  -- the hint line at y=120) - the longest real Gen 1
-                  -- move names (e.g. "DOUBLE-EDGE", "SOLARBEAM") are
-                  -- comfortably under 16 chars on their own line without
-                  -- truncation; :sub(1,16) here is purely defensive, not
-                  -- expected to ever actually cut a real move name short.
+                  -- Up to 4 moves, one per line, packed at consecutive
+                  -- 8px rows (y=64,72,80,88) instead of the previous
+                  -- double-height 16px spacing (y=64,80,96,112) - caught
+                  -- directly via a real report that the 4th move (at the
+                  -- old y=112) sat right on top of the hint line at
+                  -- y=120, with no visible gap between them. Each move is
+                  -- one short line with nothing else on its row, so a
+                  -- full 16px (two GB text rows) per move was never
+                  -- actually needed - packing them tight frees three
+                  -- clear rows (y=96/104/112) versus the old layout, all
+                  -- unused now rather than crowding the hint. The longest
+                  -- real Gen 1 move names (e.g. "DOUBLE-EDGE",
+                  -- "SOLARBEAM") are comfortably under 16 chars on their
+                  -- own line without truncation; :sub(1,16) here is
+                  -- purely defensive, not expected to ever actually cut a
+                  -- real move name short.
                   for i = 1, 4 do
                     if mon.moves[i] then
-                      Font.draw(mon.moves[i]:sub(1, 16), 16, 64 + (i - 1) * 16)
+                      Font.draw(mon.moves[i]:sub(1, 16), 16, 64 + (i - 1) * 8)
                     end
                   end
                 end
@@ -2196,9 +2225,22 @@ return function(mod)
           end
         elseif tag == "stats_upload" then
           statsUploadBusy = false
-          if not (status == "OK" and jsonIsOk(body)) then
+          if status == "OK" and jsonIsOk(body) then
+            -- Only pop the activity we actually just sent successfully -
+            -- and only if it's still at the front of the queue (it always
+            -- should be, nothing else pops index 1, but checking rather
+            -- than blindly table.remove(1) costs nothing and guards
+            -- against ever silently dropping the wrong entry if this
+            -- logic changes later). A failed send leaves the queue
+            -- untouched entirely, so the same activity is retried next
+            -- tick instead of being lost.
+            if statsUploadActivitySent and pendingActivityQueue[1] == statsUploadActivitySent then
+              table.remove(pendingActivityQueue, 1)
+            end
+          else
             mod.log:info("SilphNet: stats upload failed: %s", tostring(body))
           end
+          statsUploadActivitySent = nil
         elseif tag == "friend_detail" then
           friendDetailBusy = false
           if status == "OK" and jsonIsOk(body) then
@@ -2353,19 +2395,27 @@ return function(mod)
       if not onlineCountBusy then fireOnlineCountFetch() end
       if not nearbyBusy then fireNearbyFetch() end
     end
-    -- pendingActivity is set by the real pokemon.caught event handler
-    -- (see wiring section), not polled here - this just drains whatever's
-    -- queued, uploading it right away rather than waiting for the next
-    -- 3-minute stats cycle. Stats themselves (badges/dex counts/money/
-    -- league wins) stay on the slower STATS_INTERVAL cycle below - none
-    -- of those need to be as fresh as "just caught something."
-    local activity = pendingActivity
+    -- pendingActivityQueue is filled by the real pokemon.caught event
+    -- handler (see wiring section), not polled here - this just drains
+    -- the OLDEST queued entry, uploading it right away rather than
+    -- waiting for the next 3-minute stats cycle. Stats themselves
+    -- (badges/dex counts/money/league wins) stay on the slower
+    -- STATS_INTERVAL cycle below - none of those need to be as fresh as
+    -- "just caught something."
+    --
+    -- Peek, don't pop - the entry is only removed from the queue once
+    -- drainHttpResults confirms the server actually accepted it (see the
+    -- "stats_upload" case there). If this fires but statsUploadBusy is
+    -- still true from a previous in-flight upload, the peeked activity
+    -- simply isn't sent THIS tick - it stays at the front of the queue
+    -- and gets tried again next tick, still intact, rather than being
+    -- lost the way a single overwritable slot used to lose it.
+    local activity = pendingActivityQueue[1]
     if sinceStats >= STATS_INTERVAL or activity then
       if not statsUploadBusy then
         local snap = (sinceStats >= STATS_INTERVAL) and readStatsSnapshot() or nil
         if snap or activity then
           fireStatsUpload(snap, activity)
-          if activity then pendingActivity = nil end
           if sinceStats >= STATS_INTERVAL then sinceStats = 0 end
         end
       end
@@ -2686,7 +2736,22 @@ return function(mod)
               Font.draw((self.playerIndex) .. "/" .. n, 16, 24)
               Font.draw((p.name or "?"):sub(1, 16), 16, 48)
               Font.draw("ID   " .. (p.trainer_id or "-----"), 16, 56)
-              if isAlreadyFriend(p.account_id) then
+              -- The caller's own entry is included in this list now (see
+              -- online_by_version.php - this screen answers "how many
+              -- people total are online, including me", not just
+              -- "everyone else"), flagged is_you by the server rather
+              -- than re-derived client-side by comparing account_id
+              -- (accountId is already known locally, but trusting the
+              -- server's own flag keeps this screen's "is this me" logic
+              -- in exactly one place rather than two that could drift).
+              -- Shown as "(YOU)" instead of a friend-status prompt -
+              -- add_friend.php already rejects a self-add server-side
+              -- ("cannot friend yourself"), but there's no reason to even
+              -- show an ADD FRIEND hint on your own row in the first
+              -- place.
+              if p.is_you == "true" then
+                Font.draw("(YOU)", 16, 72)
+              elseif isAlreadyFriend(p.account_id) then
                 Font.draw("ALREADY A FRIEND", 16, 72)
               else
                 Font.draw("NOT YET A FRIEND", 16, 72)

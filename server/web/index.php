@@ -114,6 +114,48 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
     header img { width: 280px; }
     .tagline { font-size: 1rem; }
   }
+
+  /* Players-online widget + modal */
+  .online-pill {
+    display: inline-flex; align-items: center; gap: 8px; background: var(--panel);
+    border: 1px solid var(--panel-border); border-radius: 999px; padding: 8px 18px;
+    font-size: 0.92rem; cursor: pointer; color: var(--text); margin: 0 auto 8px;
+  }
+  .online-pill:hover { border-color: var(--blue); }
+  .online-pill .dot {
+    width: 9px; height: 9px; border-radius: 50%; background: #3ddc73;
+    box-shadow: 0 0 6px #3ddc73; flex-shrink: 0;
+  }
+  .online-pill strong { color: var(--text); }
+  .online-pill.is-loading .dot { background: var(--text-dim); box-shadow: none; }
+
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(6, 8, 12, 0.72);
+    align-items: center; justify-content: center; z-index: 50; padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 14px;
+    padding: 24px 26px; max-width: 380px; width: 100%;
+  }
+  .modal-box h3 { margin: 0 0 4px; font-size: 1.15rem; color: var(--orange); }
+  .modal-box .modal-sub { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 20px; }
+  .version-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-radius: 10px; background: #1c2230; margin-bottom: 10px;
+  }
+  .version-row:last-of-type { margin-bottom: 0; }
+  .version-row .v-name { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .version-row .v-swatch { width: 10px; height: 10px; border-radius: 50%; }
+  .version-row .v-count { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+  .v-swatch.red { background: #e05a5a; }
+  .v-swatch.blue { background: #4fc3f7; }
+  .v-swatch.yellow { background: #f6d648; }
+  .modal-close {
+    margin-top: 20px; width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--panel-border);
+    background: transparent; color: var(--text); cursor: pointer; font-size: 0.9rem;
+  }
+  .modal-close:hover { border-color: var(--blue); color: var(--blue); }
 </style>
 </head>
 <body>
@@ -126,6 +168,12 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
       friends by Trainer ID, and see their last-known positions - no
       server process required, works the same on desktop and mobile.
     </p>
+    <div style="display: flex; justify-content: center;">
+      <button type="button" class="online-pill is-loading" id="onlinePill" aria-haspopup="dialog">
+        <span class="dot"></span>
+        <span id="onlinePillText">Checking players online&hellip;</span>
+      </button>
+    </div>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/AshJamB/SilphNet" target="_blank" rel="noopener">Get SilphNet</a>
       <a class="btn btn-secondary" href="account.php">Manage my account</a>
@@ -224,5 +272,79 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   </footer>
 
 </div>
+
+<div class="modal-overlay" id="onlineModal" role="dialog" aria-modal="true" aria-labelledby="onlineModalTitle">
+  <div class="modal-box">
+    <h3 id="onlineModalTitle">Players online</h3>
+    <p class="modal-sub" id="onlineModalSub">Loading&hellip;</p>
+    <div id="onlineVersionRows"></div>
+    <button type="button" class="modal-close" id="onlineModalClose">Close</button>
+  </div>
+</div>
+
+<script>
+// Public, unauthenticated summary - see api/public_online_status.php.
+// Deliberately counts only, never names/Trainer IDs, so this widget works
+// for any visitor whether or not they've ever logged in.
+const ONLINE_API = '/api/public_online_status.php';
+const VERSION_META = {
+  RED: { label: 'Red', swatch: 'red' },
+  BLUE: { label: 'Blue', swatch: 'blue' },
+  YELLOW: { label: 'Yellow', swatch: 'yellow' },
+};
+
+async function fetchOnlineStatus() {
+  const pill = document.getElementById('onlinePill');
+  const pillText = document.getElementById('onlinePillText');
+  try {
+    const res = await fetch(ONLINE_API);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'unknown error');
+
+    pill.classList.remove('is-loading');
+    const noun = data.total === 1 ? 'player' : 'players';
+    pillText.innerHTML = `<strong>${data.total}</strong> ${noun} online`;
+
+    const sub = document.getElementById('onlineModalSub');
+    sub.textContent = `${data.total} ${noun} online right now, by version.`;
+
+    const rows = document.getElementById('onlineVersionRows');
+    rows.innerHTML = '';
+    for (const v of data.versions) {
+      const meta = VERSION_META[v.game_version] || { label: v.game_version, swatch: '' };
+      const row = document.createElement('div');
+      row.className = 'version-row';
+      row.innerHTML = `
+        <span class="v-name"><span class="v-swatch ${meta.swatch}"></span>${meta.label}</span>
+        <span class="v-count">${v.count}</span>
+      `;
+      rows.appendChild(row);
+    }
+  } catch (e) {
+    pill.classList.remove('is-loading');
+    pillText.textContent = 'Player count unavailable';
+  }
+}
+
+fetchOnlineStatus();
+// Refresh periodically while the page is left open, same 30s cadence the
+// mod itself polls presence at (PRESENCE_INTERVAL in main.lua) - no point
+// refreshing faster than the data underneath actually changes.
+setInterval(fetchOnlineStatus, 30000);
+
+const onlineModal = document.getElementById('onlineModal');
+document.getElementById('onlinePill').addEventListener('click', () => {
+  onlineModal.classList.add('open');
+});
+document.getElementById('onlineModalClose').addEventListener('click', () => {
+  onlineModal.classList.remove('open');
+});
+onlineModal.addEventListener('click', (e) => {
+  if (e.target === onlineModal) onlineModal.classList.remove('open');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') onlineModal.classList.remove('open');
+});
+</script>
 </body>
 </html>

@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.8.0 - SN ONLINE shows who's online per game version.**
+**Status: v1.8.1 - SN ONLINE now includes you, plus a friend-activity reliability fix.**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
