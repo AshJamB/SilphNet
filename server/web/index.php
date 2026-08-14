@@ -143,14 +143,35 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   .version-row {
     display: flex; align-items: center; justify-content: space-between;
     padding: 12px 14px; border-radius: 10px; background: #1c2230; margin-bottom: 10px;
+    width: 100%; border: 1px solid transparent; cursor: pointer; font: inherit; text-align: left;
   }
+  .version-row:hover { border-color: var(--blue); }
   .version-row:last-of-type { margin-bottom: 0; }
-  .version-row .v-name { display: flex; align-items: center; gap: 10px; font-weight: 600; }
-  .version-row .v-swatch { width: 10px; height: 10px; border-radius: 50%; }
+  .version-row .v-name { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text); }
+  .version-row .v-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .version-row .v-count-wrap { display: flex; align-items: center; gap: 8px; }
   .version-row .v-count { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+  .version-row .v-chevron { color: var(--text-dim); font-size: 0.85rem; }
   .v-swatch.red { background: #e05a5a; }
   .v-swatch.blue { background: #4fc3f7; }
   .v-swatch.yellow { background: #f6d648; }
+  .player-list { margin-bottom: 4px; }
+  .player-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 12px; border-radius: 8px; background: #1c2230; margin-bottom: 8px; font-size: 0.9rem;
+  }
+  .player-row:last-child { margin-bottom: 0; }
+  .player-row { align-items: flex-start; }
+  .player-row .p-left { display: flex; flex-direction: column; gap: 2px; }
+  .player-row .p-name { color: var(--text); font-weight: 600; }
+  .player-row .p-location { color: var(--text-dim); font-size: 0.76rem; letter-spacing: 0.02em; }
+  .player-row .p-id { color: var(--text-dim); font-size: 0.82rem; flex-shrink: 0; padding-top: 1px; }
+  .modal-back {
+    background: none; border: none; color: var(--blue); font-size: 0.85rem; cursor: pointer;
+    padding: 0; margin-bottom: 14px; display: none;
+  }
+  .modal-back.show { display: inline-block; }
+  .modal-empty { color: var(--text-dim); font-size: 0.88rem; padding: 6px 2px; }
   .modal-close {
     margin-top: 20px; width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--panel-border);
     background: transparent; color: var(--text); cursor: pointer; font-size: 0.9rem;
@@ -168,7 +189,7 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
       friends by Trainer ID, and see their last-known positions - no
       server process required, works the same on desktop and mobile.
     </p>
-    <div style="display: flex; justify-content: center;">
+    <div style="display: flex; justify-content: center; margin-top: 22px;">
       <button type="button" class="online-pill is-loading" id="onlinePill" aria-haspopup="dialog">
         <span class="dot"></span>
         <span id="onlinePillText">Checking players online&hellip;</span>
@@ -275,29 +296,115 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
 
 <div class="modal-overlay" id="onlineModal" role="dialog" aria-modal="true" aria-labelledby="onlineModalTitle">
   <div class="modal-box">
+    <button type="button" class="modal-back" id="onlineModalBack">&larr; Back to all versions</button>
     <h3 id="onlineModalTitle">Players online</h3>
     <p class="modal-sub" id="onlineModalSub">Loading&hellip;</p>
     <div id="onlineVersionRows"></div>
+    <div id="onlinePlayerRows" style="display: none;"></div>
     <button type="button" class="modal-close" id="onlineModalClose">Close</button>
   </div>
 </div>
 
 <script>
-// Public, unauthenticated summary - see api/public_online_status.php.
-// Deliberately counts only, never names/Trainer IDs, so this widget works
-// for any visitor whether or not they've ever logged in.
-const ONLINE_API = '/api/public_online_status.php';
+// Two public, unauthenticated endpoints:
+//   public_online_status.php  - counts only, drives the pill + summary view
+//   public_online_players.php - names + Trainer IDs for ONE version, drives
+//                                the drilldown view when a version is clicked
+// Split deliberately (see public_online_players.php's own comment) rather
+// than one endpoint with an "include names" flag, so it's obvious which
+// file is safe-by-default and which one intentionally exposes identity.
+const ONLINE_STATUS_API = '/api/public_online_status.php';
+const ONLINE_PLAYERS_API = '/api/public_online_players.php';
 const VERSION_META = {
   RED: { label: 'Red', swatch: 'red' },
   BLUE: { label: 'Blue', swatch: 'blue' },
   YELLOW: { label: 'Yellow', swatch: 'yellow' },
 };
+let lastOnlineData = null;   // cached summary, so "back" doesn't need a re-fetch
+
+// Same fallback formatting main.lua's own friendlyMapName() uses for any
+// map_id not in its explicit FRIENDLY_MAP_NAMES table (see
+// public_online_players.php's comment on why this isn't shared code) -
+// "VICTORY_ROAD" -> "VICTORY ROAD". Good enough for the overwhelming
+// majority of real Gen 1 map ids without needing that whole table
+// duplicated here in JS too.
+function friendlyMapName(mapId) {
+  if (!mapId) return 'UNKNOWN';
+  return mapId.replace(/_/g, ' ');
+}
+
+function renderSummaryView(data) {
+  document.getElementById('onlineModalBack').classList.remove('show');
+  document.getElementById('onlinePlayerRows').style.display = 'none';
+  document.getElementById('onlineVersionRows').style.display = '';
+  document.getElementById('onlineModalTitle').textContent = 'Players online';
+
+  const noun = data.total === 1 ? 'player' : 'players';
+  document.getElementById('onlineModalSub').textContent = `${data.total} ${noun} online right now - click a version to see who.`;
+
+  const rows = document.getElementById('onlineVersionRows');
+  rows.innerHTML = '';
+  for (const v of data.versions) {
+    const meta = VERSION_META[v.game_version] || { label: v.game_version, swatch: '' };
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'version-row';
+    row.innerHTML = `
+      <span class="v-name"><span class="v-swatch ${meta.swatch}"></span>${meta.label}</span>
+      <span class="v-count-wrap"><span class="v-count">${v.count}</span><span class="v-chevron">&rsaquo;</span></span>
+    `;
+    row.addEventListener('click', () => showPlayerList(v.game_version, meta.label));
+    rows.appendChild(row);
+  }
+}
+
+async function showPlayerList(gameVersion, label) {
+  document.getElementById('onlineModalBack').classList.add('show');
+  document.getElementById('onlineVersionRows').style.display = 'none';
+  const playerRows = document.getElementById('onlinePlayerRows');
+  playerRows.style.display = '';
+  playerRows.innerHTML = '<p class="modal-empty">Loading&hellip;</p>';
+  document.getElementById('onlineModalTitle').textContent = `${label} online`;
+  document.getElementById('onlineModalSub').textContent = '';
+
+  try {
+    const res = await fetch(`${ONLINE_PLAYERS_API}?game_version=${encodeURIComponent(gameVersion)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'unknown error');
+
+    if (data.players.length === 0) {
+      playerRows.innerHTML = '<p class="modal-empty">Nobody online for this version right now.</p>';
+      return;
+    }
+    playerRows.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'player-list';
+    for (const p of data.players) {
+      const row = document.createElement('div');
+      row.className = 'player-row';
+      row.innerHTML = `
+        <span class="p-left">
+          <span class="p-name"></span>
+          <span class="p-location"></span>
+        </span>
+        <span class="p-id"></span>
+      `;
+      row.querySelector('.p-name').textContent = p.name;
+      row.querySelector('.p-location').textContent = friendlyMapName(p.map_id);
+      row.querySelector('.p-id').textContent = `ID ${p.trainer_id}`;
+      list.appendChild(row);
+    }
+    playerRows.appendChild(list);
+  } catch (e) {
+    playerRows.innerHTML = '<p class="modal-empty">Could not load the player list. Try again.</p>';
+  }
+}
 
 async function fetchOnlineStatus() {
   const pill = document.getElementById('onlinePill');
   const pillText = document.getElementById('onlinePillText');
   try {
-    const res = await fetch(ONLINE_API);
+    const res = await fetch(ONLINE_STATUS_API);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'unknown error');
 
@@ -305,20 +412,12 @@ async function fetchOnlineStatus() {
     const noun = data.total === 1 ? 'player' : 'players';
     pillText.innerHTML = `<strong>${data.total}</strong> ${noun} online`;
 
-    const sub = document.getElementById('onlineModalSub');
-    sub.textContent = `${data.total} ${noun} online right now, by version.`;
-
-    const rows = document.getElementById('onlineVersionRows');
-    rows.innerHTML = '';
-    for (const v of data.versions) {
-      const meta = VERSION_META[v.game_version] || { label: v.game_version, swatch: '' };
-      const row = document.createElement('div');
-      row.className = 'version-row';
-      row.innerHTML = `
-        <span class="v-name"><span class="v-swatch ${meta.swatch}"></span>${meta.label}</span>
-        <span class="v-count">${v.count}</span>
-      `;
-      rows.appendChild(row);
+    lastOnlineData = data;
+    // Only re-render the summary view if the modal isn't currently showing
+    // a version drilldown - a background 30s refresh shouldn't yank the
+    // visitor back out of the list they're looking at.
+    if (!document.getElementById('onlineModalBack').classList.contains('show')) {
+      renderSummaryView(data);
     }
   } catch (e) {
     pill.classList.remove('is-loading');
@@ -334,7 +433,11 @@ setInterval(fetchOnlineStatus, 30000);
 
 const onlineModal = document.getElementById('onlineModal');
 document.getElementById('onlinePill').addEventListener('click', () => {
+  if (lastOnlineData) renderSummaryView(lastOnlineData);
   onlineModal.classList.add('open');
+});
+document.getElementById('onlineModalBack').addEventListener('click', () => {
+  if (lastOnlineData) renderSummaryView(lastOnlineData);
 });
 document.getElementById('onlineModalClose').addEventListener('click', () => {
   onlineModal.classList.remove('open');
