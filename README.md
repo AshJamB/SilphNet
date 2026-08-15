@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.8.1 - SN ONLINE now includes you, plus a friend-activity reliability fix.**
+**Status: v1.9.0 - HTTP requests are now synchronous (a Gen1Recomp engine update permanently blocked love.thread for mods).**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
@@ -426,7 +426,7 @@ at it.
 
 ### Shipped
 
-1. Done - async presence: login, periodic position reporting, friends' last-known positions
+1. Done - presence: login, periodic position reporting, friends' last-known positions (originally async via a background love.thread per request; now synchronous as of v1.9.0 - see that version's changelog entry for why)
 2. Done - static friend markers on the map, plus a friends list with online/offline and time-ago
 3. Done - Trainer ID and in-game "add friend"/"accept friend" screens (digit entry, no typing)
 4. Done - GitHub auto-update, so the launcher can pull new mod releases directly (see `.github/workflows/release-silphnet.yml`)

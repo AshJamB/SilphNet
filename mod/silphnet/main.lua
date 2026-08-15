@@ -302,33 +302,51 @@ return function(mod)
   end
 
   -- ---- HTTP plumbing ------------------------------------------------------
-  -- One short-lived love.thread per request (same pattern proven in
-  -- experiments/http_test) - these fire at most every few seconds, so
-  -- there's no benefit to a persistent thread, and a short-lived one can't
-  -- wedge the pump loop if a single request hangs.
-  local HTTP_POST_SRC = [==[
-    local url, body = ...
-    local RESULT = love.thread.getChannel("silphnet_http_result")
-    local ok, http = pcall(require, "socket.http")
-    if not ok then RESULT:push("TAG_PLACEHOLDER|ERR|socket.http unavailable"); return end
-    http.TIMEOUT = 8
-    local respBody, code = http.request(url, body)
-    if not respBody then RESULT:push("TAG_PLACEHOLDER|ERR|" .. tostring(code))
-    else RESULT:push("TAG_PLACEHOLDER|OK|" .. respBody) end
-  ]==]
+  -- SYNCHRONOUS as of this version - a Gen1Recomp engine update fully and
+  -- permanently blocked love.thread from mod code (confirmed directly
+  -- against the engine's real sandbox source, src/mods/Sandbox.lua:
+  -- BLOCKED_LOVE.thread = true, with the comment "value is the replacement
+  -- to name in the error, or true when there is none" - i.e. no facade, no
+  -- workaround, by design, since "a LÖVE thread runs in a separate Lua
+  -- state... which the sandbox in this state cannot reach, so a stand-in
+  -- would be a hole rather than a reroute"). The previous version of this
+  -- file ran every request on its own short-lived love.thread precisely so
+  -- a slow/hanging request could never freeze the game - that approach is
+  -- now impossible, not just harder.
+  --
+  -- What's NOT blocked: require("socket.http") itself still works directly
+  -- on the main thread, gated by the same "network" permission this
+  -- manifest.json already declares (Sandbox.lua's NETWORK table lists
+  -- socket/http/etc., checked against permissionSet.network - nothing
+  -- about that check requires a thread). So every request in this file now
+  -- calls http.request(...) directly and blocks until it returns, instead
+  -- of firing a thread and polling a channel for the result.
+  --
+  -- Real, unavoidable consequence: the game visibly pauses for the
+  -- duration of every request (login, ping, friends fetch, add-friend,
+  -- ...), not just a network hiccup on a background thread. HTTP_TIMEOUT
+  -- is deliberately cut from the old 8s down to 2.5s specifically because
+  -- of this - a normal fast response (the common case, usually well under
+  -- 1s) still feels instant, but a genuinely slow or unreachable server
+  -- now caps the worst-case freeze at 2.5s instead of a much longer one.
+  -- socket.http.request's own connect+read timeout (http.TIMEOUT) is what
+  -- actually enforces this bound; nothing here can time out a call that
+  -- library doesn't itself give up on.
+  local HTTP_TIMEOUT_SECONDS = 2.5
 
-  local HTTP_GET_SRC = [==[
-    local url = ...
-    local RESULT = love.thread.getChannel("silphnet_http_result")
-    local ok, http = pcall(require, "socket.http")
-    if not ok then RESULT:push("TAG_PLACEHOLDER|ERR|socket.http unavailable"); return end
-    http.TIMEOUT = 8
-    local body, code = http.request(url)
-    if not body then RESULT:push("TAG_PLACEHOLDER|ERR|" .. tostring(code))
-    else RESULT:push("TAG_PLACEHOLDER|OK|" .. body) end
-  ]==]
-
-  local HTTP_RESULT = love.thread.getChannel("silphnet_http_result")
+  -- Every result is still shaped exactly like the old thread-channel
+  -- payload ("tag|status|body") and still consumed by the same
+  -- drainHttpResults()/tag-dispatch logic further down, completely
+  -- unchanged - only HOW a result gets produced changed (synchronously,
+  -- right here, instead of asynchronously via a separate Lua state), so
+  -- every call site and every screen's busy-flag/tag handling below needed
+  -- no changes at all. HTTP_RESULT is now a plain local queue (a Lua
+  -- array used FIFO) instead of a love.thread channel - pop() mirrors a
+  -- channel's :pop() (returns nil, not blocks, when empty).
+  local HTTP_RESULT = {}
+  local function httpResultPop()
+    return table.remove(HTTP_RESULT, 1)
+  end
 
   -- Tiny hand-rolled querystring encoder - avoids a JSON/urlencode lib for
   -- a handful of known, already-sanitized fields.
@@ -346,20 +364,39 @@ return function(mod)
     return table.concat(parts, "&")
   end
 
+  -- Fires the actual request right now, synchronously, and pushes exactly
+  -- one "tag|status|body" string onto HTTP_RESULT - the same format the
+  -- old thread source used to push, so drainHttpResults doesn't need to
+  -- know or care that this is no longer async under the hood. socket.http
+  -- itself is required fresh on first use (pcall-guarded, same defensive
+  -- style the old thread source used) rather than at file scope, in case
+  -- the "network" permission is ever missing from manifest.json - that
+  -- failure now surfaces as a normal ERR result through the usual
+  -- tag-dispatch path instead of a raw require() error.
+  local function runHttpRequest(tag, url, body)
+    local ok, http = pcall(require, "socket.http")
+    if not ok then
+      table.insert(HTTP_RESULT, tag .. "|ERR|socket.http unavailable")
+      return
+    end
+    http.TIMEOUT = HTTP_TIMEOUT_SECONDS
+    local respBody, code = http.request(url, body)
+    if not respBody then
+      table.insert(HTTP_RESULT, tag .. "|ERR|" .. tostring(code))
+    else
+      table.insert(HTTP_RESULT, tag .. "|OK|" .. respBody)
+    end
+  end
+
   -- tag identifies which request a result belongs to when it comes back
-  -- (login/register/ping/friends can all be in flight independently).
-  -- Substitutes the literal string "TAG_PLACEHOLDER" in the thread source
-  -- for the real tag before starting it, since love.thread sources are
-  -- plain strings compiled fresh per thread - simplest way to get a
-  -- distinguishable prefix back out without a shared upvalue (threads
-  -- don't share Lua state).
+  -- (login/register/ping/friends can all be "in flight" independently, in
+  -- the sense of being distinguishable results in the queue - not actually
+  -- concurrent anymore, since there's only the one main thread now).
   local function httpPost(tag, path, fields)
-    local src = HTTP_POST_SRC:gsub("TAG_PLACEHOLDER", tag)
-    love.thread.newThread(src):start(API_BASE .. path, encodeForm(fields))
+    runHttpRequest(tag, API_BASE .. path, encodeForm(fields))
   end
   local function httpGet(tag, path, query)
-    local src = HTTP_GET_SRC:gsub("TAG_PLACEHOLDER", tag)
-    love.thread.newThread(src):start(API_BASE .. path .. "?" .. encodeForm(query))
+    runHttpRequest(tag, API_BASE .. path .. "?" .. encodeForm(query))
   end
 
   -- Minimal hand-rolled JSON reader for exactly the shapes these five
@@ -2185,7 +2222,7 @@ return function(mod)
   -- its own update(dt), so those specific waits resolve on the very next
   -- frame regardless of whether the player is standing still.
   drainHttpResults = function()
-    local r = HTTP_RESULT:pop()
+    local r = httpResultPop()
     while r do
       local tag, status, body = string.match(r, "^([^|]*)|([^|]*)|(.*)$")
       if tag then
@@ -2370,7 +2407,7 @@ return function(mod)
           handleHttpResult(tag, status, body)
         end
       end
-      r = HTTP_RESULT:pop()
+      r = httpResultPop()
     end
   end
 
