@@ -18,7 +18,7 @@ require __DIR__ . '/db.php';
 require __DIR__ . '/auth.php';
 
 $account = silphnet_require_token();
-$otherId = trim($_POST['account_id'] ?? '');
+$otherId = trim($_POST['account_id'] ?? $_GET['account_id'] ?? '');
 if ($otherId === '') silphnet_error('missing account_id');
 // Same shape as every other account_id in this API (see register.php) -
 // not a trust boundary, just rejects obviously malformed input early.

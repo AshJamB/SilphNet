@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.0.0)
+-- SilphNet - async presence + friends (v1.10.0)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -392,11 +392,124 @@ return function(mod)
   -- (login/register/ping/friends can all be "in flight" independently, in
   -- the sense of being distinguishable results in the queue - not actually
   -- concurrent anymore, since there's only the one main thread now).
+  --
+  -- httpPost stays fully synchronous, unconditionally, forever - this is
+  -- the ONLY request shape allowed to carry a password (login.php/
+  -- register.php) or a bare session token with nothing else sensitive
+  -- attached (login_token.php), and mod.fetch (see below) is GET-only, so
+  -- there is no async path for these three even once mod.fetch is
+  -- available. A password must never appear in a URL/server log.
   local function httpPost(tag, path, fields)
     runHttpRequest(tag, API_BASE .. path, encodeForm(fields))
   end
   local function httpGet(tag, path, query)
     runHttpRequest(tag, API_BASE .. path .. "?" .. encodeForm(query))
+  end
+
+  -- ---- async fetch layer (mod.fetch) ---------------------------------------
+  -- mod.fetch is a real, documented async-HTTP replacement for the
+  -- love.thread capability blocked above (confirmed directly against
+  -- docs/modding.md and the engine's own src/mods/Net.lua): mod.fetch:get
+  -- returns a handle immediately, mod.fetch:poll(handle) never blocks, and
+  -- its workers run ENGINE code, not the mod's, so this grants asynchrony
+  -- without the reach love.thread would have. GET-only, http/https-only,
+  -- and capped at 4 requests in flight PER MOD (Net.MAX_INFLIGHT) - a real
+  -- ceiling shared with the launcher's own downloads, not just a courtesy
+  -- limit, so going over it returns nil/a reason rather than queuing for you.
+  --
+  -- This whole layer is a pure enhancement: on a build/permission set
+  -- without it (mod.fetch nil, or :available() false - e.g. no "network"
+  -- permission, or an older engine build), httpAsyncGet below falls
+  -- straight back to the old synchronous runHttpRequest path, so every
+  -- endpoint still works exactly as before, just with the visible pause it
+  -- always had.
+  local FETCH_MAX_INFLIGHT = 4   -- mirrors Net.MAX_INFLIGHT (not itself queryable from mod code)
+
+  local fetchAvailable = nil   -- nil = not probed yet; true/false once known
+  local function isFetchAvailable()
+    if fetchAvailable ~= nil then return fetchAvailable end
+    local ok, avail = pcall(function() return mod.fetch and mod.fetch:available() end)
+    fetchAvailable = (ok and avail == true)
+    return fetchAvailable
+  end
+
+  local activeFetches = {}      -- handle -> tag, one entry per in-flight job
+  local activeFetchCount = 0
+  local fetchQueue = {}         -- array of { tag, url } waiting for a free inflight slot
+
+  -- Drains fetchQueue into real mod.fetch:get() calls until either the
+  -- queue is empty or the 4-in-flight ceiling is hit. pumpPresenceTimer
+  -- alone can produce 5 simultaneous requests (ping+friends+pending+
+  -- online_count+nearby) against that 4 ceiling, so the 5th deliberately
+  -- waits here rather than being dropped - it's tried again the very next
+  -- poll once any one of the other four completes and frees a slot,
+  -- following this project's established "never silently lose a request"
+  -- discipline (see pendingActivityQueue above).
+  local function submitNextQueued()
+    while activeFetchCount < FETCH_MAX_INFLIGHT and #fetchQueue > 0 do
+      local item = fetchQueue[1]
+      local ok, handle, reason = pcall(function()
+        return mod.fetch:get(item.url, { maxSeconds = HTTP_TIMEOUT_SECONDS })
+      end)
+      if ok and handle then
+        table.remove(fetchQueue, 1)
+        activeFetches[handle] = item.tag
+        activeFetchCount = activeFetchCount + 1
+      else
+        -- Ceiling hit (nil handle) or a genuine error (pcall failed) -
+        -- either way, stop trying THIS poll and leave the item at the
+        -- front of the queue for the next one. Logged once per failed
+        -- attempt rather than silently, but not popped, so it's never lost.
+        if not ok then mod.log:warn("SilphNet: mod.fetch:get failed: %s", tostring(handle)) end
+        break
+      end
+    end
+  end
+
+  -- Polls every currently in-flight handle exactly once, pushing a
+  -- "tag|OK|body" or "tag|ERR|reason" string onto the SAME HTTP_RESULT
+  -- queue runHttpRequest already uses - drainHttpResults' tag-dispatch
+  -- logic doesn't need to know or care whether a given result came from
+  -- the synchronous path or from here. Never blocks (mod.fetch:poll is
+  -- documented as non-blocking), safe to call every frame.
+  local function pollFetches()
+    for handle, tag in pairs(activeFetches) do
+      local ok, result = pcall(function() return mod.fetch:poll(handle) end)
+      if ok and type(result) == "table" and result.status ~= "pending" then
+        activeFetches[handle] = nil
+        activeFetchCount = activeFetchCount - 1
+        if result.status == "ok" then
+          table.insert(HTTP_RESULT, tag .. "|OK|" .. tostring(result.body or ""))
+        else
+          table.insert(HTTP_RESULT, tag .. "|ERR|" .. tostring(result.err or result.status or "fetch error"))
+        end
+        pcall(function() mod.fetch:release(handle) end)
+      elseif not ok then
+        -- A forged/foreign/unknown handle polls as an error per
+        -- docs/modding.md - shouldn't happen for a handle this mod itself
+        -- just got back from mod.fetch:get, but treated as a failed
+        -- request (not a silent drop, not an infinite retry) if it ever does.
+        activeFetches[handle] = nil
+        activeFetchCount = activeFetchCount - 1
+        table.insert(HTTP_RESULT, tag .. "|ERR|fetch poll failed")
+      end
+    end
+    submitNextQueued()
+  end
+
+  -- The async-when-available GET request every endpoint EXCEPT login/
+  -- register/login_token should use. Always GET+querystring shaped (never
+  -- POST) since mod.fetch itself is GET-only - see the field-list comments
+  -- on each fire* function below for exactly what each endpoint's PHP side
+  -- now also accepts via $_GET (see server/web/api/*.php).
+  local function httpAsyncGet(tag, path, query)
+    local url = API_BASE .. path .. "?" .. encodeForm(query)
+    if isFetchAvailable() then
+      table.insert(fetchQueue, { tag = tag, url = url })
+      submitNextQueued()
+    else
+      runHttpRequest(tag, url)   -- nil body => GET, same as the old httpGet
+    end
   end
 
   -- Minimal hand-rolled JSON reader for exactly the shapes these five
@@ -879,7 +992,7 @@ return function(mod)
   local function firePresencePing()
     if authState ~= "authed" or not myMap then return end
     presenceBusy = true
-    httpPost("ping", "/ping.php", {
+    httpAsyncGet("ping", "/ping.php", {
       token = mod.save:get("token") or "",
       map_id = myMap, x = myX or 0, y = myY or 0,
       facing = myFacing or "down", game_version = gameVersion,
@@ -889,19 +1002,19 @@ return function(mod)
   fireFriendsFetch = function()
     if authState ~= "authed" then return end
     friendsBusy = true
-    httpGet("friends", "/friends.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("friends", "/friends.php", { token = mod.save:get("token") or "" })
   end
 
   firePendingFetch = function()
     if authState ~= "authed" then return end
     pendingBusy = true
-    httpGet("pending", "/pending_requests.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("pending", "/pending_requests.php", { token = mod.save:get("token") or "" })
   end
 
   fireOnlineCountFetch = function()
     if authState ~= "authed" then return end
     onlineCountBusy = true
-    httpGet("online_count", "/online_count.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("online_count", "/online_count.php", { token = mod.save:get("token") or "" })
   end
 
   -- Only meaningful in the overworld with a known map - same guard
@@ -910,7 +1023,7 @@ return function(mod)
   fireNearbyFetch = function()
     if authState ~= "authed" or not myMap then return end
     nearbyBusy = true
-    httpPost("nearby", "/nearby.php", { token = mod.save:get("token") or "", map_id = myMap })
+    httpAsyncGet("nearby", "/nearby.php", { token = mod.save:get("token") or "", map_id = myMap })
   end
 
   -- On-demand only - fired once when SilphNetOnline opens, NOT on the 30s
@@ -924,7 +1037,7 @@ return function(mod)
   fireOnlineByVersionFetch = function()
     if authState ~= "authed" then return end
     onlineByVersionBusy = true
-    httpGet("online_by_version", "/online_by_version.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("online_by_version", "/online_by_version.php", { token = mod.save:get("token") or "" })
   end
 
   -- On-demand only - fired once when SilphNetFriendDetail opens, NOT on
@@ -938,7 +1051,7 @@ return function(mod)
   fireFriendDetailFetch = function(accountId)
     if authState ~= "authed" or not accountId then return end
     friendDetailBusy = true
-    httpPost("friend_detail", "/friend_detail.php", {
+    httpAsyncGet("friend_detail", "/friend_detail.php", {
       token = mod.save:get("token") or "", account_id = accountId,
     })
   end
@@ -965,12 +1078,12 @@ return function(mod)
     if activity then fields.activity = activity end
     statsUploadBusy = true
     statsUploadActivitySent = activity   -- remembered so drainHttpResults knows what to pop on success
-    httpPost("stats_upload", "/stats.php", fields)
+    httpAsyncGet("stats_upload", "/stats.php", fields)
   end
 
   local function fireAddFriend(trainerId)
     addFriendStatus = "SENDING..."
-    httpPost("add_friend", "/add_friend.php", { token = mod.save:get("token") or "", trainer_id = trainerId })
+    httpAsyncGet("add_friend", "/add_friend.php", { token = mod.save:get("token") or "", trainer_id = trainerId })
   end
 
   -- accountId here is the OTHER person's account_id (see friends.php's
@@ -978,7 +1091,7 @@ return function(mod)
   -- directions of an accepted friendship in one transaction, same
   -- reasoning as accept_friend.php inserting both directions on accept.
   local function fireRemoveFriend(accountId)
-    httpPost("remove_friend", "/remove_friend.php", { token = mod.save:get("token") or "", account_id = accountId })
+    httpAsyncGet("remove_friend", "/remove_friend.php", { token = mod.save:get("token") or "", account_id = accountId })
   end
 
   -- ---- friend silhouettes (static, one placement per poll, never tweened) -
@@ -2165,7 +2278,7 @@ return function(mod)
           if input:wasPressed("a") and n > 0 then
             local req = pendingRequests[self.page]
             if req and req.name then
-              httpPost("accept_friend", "/accept_friend.php",
+              httpAsyncGet("accept_friend", "/accept_friend.php",
                 { token = mod.save:get("token") or "", requester_name = req.name })
             end
             if self.page > 1 then self.page = self.page - 1 end
@@ -2222,6 +2335,13 @@ return function(mod)
   -- its own update(dt), so those specific waits resolve on the very next
   -- frame regardless of whether the player is standing still.
   drainHttpResults = function()
+    -- Advances every in-flight mod.fetch job one poll's worth (never
+    -- blocks) and submits anything still queued behind the 4-in-flight
+    -- ceiling - BEFORE draining HTTP_RESULT, so a job that just finished
+    -- gets dispatched to its tag handler in this same call rather than
+    -- waiting a full extra frame. No-op entirely (cheap) when mod.fetch
+    -- isn't available on this build - see isFetchAvailable/httpAsyncGet.
+    pcall(pollFetches)
     local r = httpResultPop()
     while r do
       local tag, status, body = string.match(r, "^([^|]*)|([^|]*)|(.*)$")

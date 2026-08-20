@@ -1,0 +1,45 @@
+# SilphNet - crawler policy. Deliberately permissive: this is a small,
+# free community project with nothing behind these pages worth hiding
+# from search engines or AI assistants - the goal is maximum
+# discoverability, not restriction. account.php is separately marked
+# noindex via its own <meta name="robots"> tag (a login utility, not
+# content worth surfacing in search results) rather than blocked here,
+# so it stays crawlable/followable for link-structure purposes while
+# just not appearing as its own search result.
+
+User-agent: *
+Allow: /
+
+# Common AI assistant / LLM crawlers, listed explicitly (even though
+# "User-agent: *" above already allows them) so it's obvious at a
+# glance that this is an intentional, deliberate choice rather than an
+# oversight - covers both "answer a live question" bots and "train a
+# future model" bots, since this project has no objection to either.
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+Sitemap: https://silphnet.jamshark.co.uk/sitemap.xml

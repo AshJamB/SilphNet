@@ -18,7 +18,7 @@ const SILPHNET_ONLINE_AFTER_SECONDS = 300;
 
 $account = silphnet_require_token();
 
-$mapId = trim($_POST['map_id'] ?? '');
+$mapId = trim($_POST['map_id'] ?? $_GET['map_id'] ?? '');
 if ($mapId === '') silphnet_error('missing required field: map_id');
 $mapId = substr($mapId, 0, 64);
 

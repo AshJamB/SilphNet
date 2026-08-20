@@ -34,13 +34,13 @@ require __DIR__ . '/auth.php';
 
 $account = silphnet_require_token();
 
-$version = strtoupper(trim($_POST['game_version'] ?? 'UNKNOWN'));
+$version = strtoupper(trim($_POST['game_version'] ?? $_GET['game_version'] ?? 'UNKNOWN'));
 if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'UNKNOWN'], true)) $version = 'UNKNOWN';
 
-$hasStats = isset($_POST['badges']) || isset($_POST['pokedex_seen'])
-    || isset($_POST['pokedex_caught']) || isset($_POST['league_wins']) || isset($_POST['money'])
-    || isset($_POST['play_seconds']) || isset($_POST['party']);
-$activity = rtrim($_POST['activity'] ?? '', " \t\0\x0B");
+$hasStats = isset($_POST['badges']) || isset($_GET['badges']) || isset($_POST['pokedex_seen']) || isset($_GET['pokedex_seen'])
+    || isset($_POST['pokedex_caught']) || isset($_GET['pokedex_caught']) || isset($_POST['league_wins']) || isset($_GET['league_wins']) || isset($_POST['money']) || isset($_GET['money'])
+    || isset($_POST['play_seconds']) || isset($_GET['play_seconds']) || isset($_POST['party']) || isset($_GET['party']);
+$activity = rtrim($_POST['activity'] ?? $_GET['activity'] ?? '', " \t\0\x0B");
 
 if (!$hasStats && $activity === '') {
     silphnet_error('nothing to update: provide stats field(s) and/or activity');
@@ -59,7 +59,7 @@ try {
         // party is capped to the party column's real size (512), not
         // trimmed/altered otherwise - it's an opaque string as far as
         // this endpoint is concerned (see comment above $hasStats).
-        $party = substr((string)($_POST['party'] ?? ''), 0, 512);
+        $party = substr((string)($_POST['party'] ?? $_GET['party'] ?? ''), 0, 512);
 
         $stmt = $pdo->prepare(
             'INSERT INTO friend_stats
@@ -73,12 +73,12 @@ try {
         );
         $stmt->execute([
             ':account_id' => $account['account_id'], ':version' => $version,
-            ':badges' => (int)($_POST['badges'] ?? 0),
-            ':seen' => (int)($_POST['pokedex_seen'] ?? 0),
-            ':caught' => (int)($_POST['pokedex_caught'] ?? 0),
-            ':wins' => (int)($_POST['league_wins'] ?? 0),
-            ':money' => (int)($_POST['money'] ?? 0),
-            ':play_seconds' => (int)($_POST['play_seconds'] ?? 0),
+            ':badges' => (int)($_POST['badges'] ?? $_GET['badges'] ?? 0),
+            ':seen' => (int)($_POST['pokedex_seen'] ?? $_GET['pokedex_seen'] ?? 0),
+            ':caught' => (int)($_POST['pokedex_caught'] ?? $_GET['pokedex_caught'] ?? 0),
+            ':wins' => (int)($_POST['league_wins'] ?? $_GET['league_wins'] ?? 0),
+            ':money' => (int)($_POST['money'] ?? $_GET['money'] ?? 0),
+            ':play_seconds' => (int)($_POST['play_seconds'] ?? $_GET['play_seconds'] ?? 0),
             ':party' => $party,
         ]);
     }

@@ -18,11 +18,11 @@ require __DIR__ . '/auth.php';
 
 $account = silphnet_require_token();   // exits with 401 if invalid
 
-$mapId   = trim($_POST['map_id'] ?? '');
-$x       = $_POST['x'] ?? null;
-$y       = $_POST['y'] ?? null;
-$facing  = trim($_POST['facing'] ?? 'down');
-$version = strtoupper(trim($_POST['game_version'] ?? 'UNKNOWN'));
+$mapId   = trim($_POST['map_id'] ?? $_GET['map_id'] ?? '');
+$x       = $_POST['x'] ?? $_GET['x'] ?? null;
+$y       = $_POST['y'] ?? $_GET['y'] ?? null;
+$facing  = trim($_POST['facing'] ?? $_GET['facing'] ?? 'down');
+$version = strtoupper(trim($_POST['game_version'] ?? $_GET['game_version'] ?? 'UNKNOWN'));
 
 if ($mapId === '' || $x === null || $y === null) {
     silphnet_error('missing required field(s): map_id, x, y');

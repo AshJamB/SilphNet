@@ -40,7 +40,7 @@ require __DIR__ . '/auth.php';
 
 $account = silphnet_require_token();
 
-$friendId = trim($_POST['account_id'] ?? '');
+$friendId = trim($_POST['account_id'] ?? $_GET['account_id'] ?? '');
 if ($friendId === '') silphnet_error('missing required field: account_id');
 $friendId = substr($friendId, 0, 16);
 

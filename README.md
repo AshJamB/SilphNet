@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.9.0 - HTTP requests are now synchronous (a Gen1Recomp engine update permanently blocked love.thread for mods).**
+**Status: v1.10.0 - HTTP requests are async again, via the engine's new `mod.fetch` API (a real, documented replacement for the `love.thread` capability an earlier engine update permanently blocked - see below). Falls back to the old synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
@@ -59,6 +59,9 @@ server/
     index.php              public landing page (features, install steps, GitHub link, socials)
     account.php            log in on the web to manage your account (rename, Trainer ID, password, recovery email)
     assets/                images used by index.php (logo, banner)
+    robots.txt             crawler policy - deliberately permissive, explicitly allows AI assistant/LLM crawlers
+    sitemap.xml             lists index.php/account.php for search engines
+    llms.txt                 plain-markdown site summary for AI assistants (emerging convention, separate from robots.txt)
     api/                  the PHP + MySQL gameplay API, kept separate from the public site above -
                            everything the mod itself talks to lives here, at /api on your host
       schema.sql             run once in phpMyAdmin to create the tables
@@ -426,7 +429,7 @@ at it.
 
 ### Shipped
 
-1. Done - presence: login, periodic position reporting, friends' last-known positions (originally async via a background love.thread per request; now synchronous as of v1.9.0 - see that version's changelog entry for why)
+1. Done - presence: login, periodic position reporting, friends' last-known positions (originally async via a background love.thread per request; went synchronous in v1.9.0 after an engine update permanently blocked love.thread for mods; async again as of v1.10.0 via the engine's newer `mod.fetch` API, with an automatic fallback to the v1.9.0 synchronous behaviour on any build/permission set without it - login/register/cached-token requests stay synchronous either way, since they're the only ones that can carry a password or a bare token with nothing else attached, and `mod.fetch` is GET-only)
 2. Done - static friend markers on the map, plus a friends list with online/offline and time-ago
 3. Done - Trainer ID and in-game "add friend"/"accept friend" screens (digit entry, no typing)
 4. Done - GitHub auto-update, so the launcher can pull new mod releases directly (see `.github/workflows/release-silphnet.yml`)
@@ -564,6 +567,43 @@ Confirmed, from the engine's own working code:
     instead of the current `Font.drawBox` dialogue screens - a real,
     separate visual overhaul, not a quick reskin.
 
+### Ideas, not yet researched
+
+Jotted down to not lose them - none of these have had the "check the
+real engine source before promising anything" treatment the rest of
+this roadmap gets, so treat the notes below as the honest state of
+knowledge, not a commitment.
+
+19. **Trading with friends.** Hits the same wall as item 15's battling
+    limitation: there's no documented way for a mod to read or write a
+    DIFFERENT player's live save, or referee a real synchronous
+    exchange between two players, outside the engine's own built-in
+    link-play session. Whether link-play exposes any mod-facing hook at
+    all (to piggyback a trade offer/accept flow on top of it, rather
+    than trying to build one from scratch) is a real open question that
+    needs checking against the actual engine source/wiki before this
+    goes any further - not assumed either way yet. A server-side
+    "trade listing" table (who's offering what, who wants it) is the
+    easy half; actually moving a Pokemon from one person's save to
+    another's is the unconfirmed half.
+20. **Battling with friends.** Same underlying blocker as item 19 and
+    item 15's Community Champion research - no confirmed way to
+    referee a live battle between two real, currently-online players.
+    Distinct from the Community Champion idea (item 15), which only
+    ever needed a locally-run AI opponent built from snapshotted data,
+    not a live connection to the other player at battle time.
+21. **SN MYSTERY GIFT.** A new Start Menu screen offering version-
+    exclusive Pokemon (e.g. Growlithe for Blue players, who can't
+    normally get one without trading) or other Mystery-Gift-style
+    items. Writing to your OWN save is already confirmed possible
+    (`game.save.flags` is directly writable - see the Tutorial 08
+    example cited elsewhere in this doc), but that's about setting
+    flags/items, not confirmed for actually inserting a full Pokemon
+    into `save.party`/PC boxes via the documented mod API - needs real
+    research into whether that's a supported write path or whether it
+    would need the same kind of undocumented-internals workaround the
+    Community Champion battle-trigger problem ran into.
+
 See `ACCOUNTS.md` for the account design and `SECURITY.md` for the security
 model.
 
@@ -600,6 +640,42 @@ Recovery email (forgot-password) is entirely optional - the site works
 fine without ever configuring `EMAIL_ENCRYPTION_KEY`/`SMTP_*`; players
 just won't have a self-serve way to reset a forgotten password until you
 do. See `SECURITY.md` for how the stored email is encrypted.
+
+## Search engine and AI assistant discoverability
+
+`index.php` and `account.php` carry the usual SEO surface: an Open Graph +
+Twitter Card preview (using `assets/silphnet-banner.png` as the share
+image), a canonical link, a `robots` meta tag (`index, follow` on the
+homepage, `noindex, follow` on `account.php` since it's a login utility
+with no unique public content), and schema.org `SoftwareApplication`
+structured data (JSON-LD) on the homepage describing what SilphNet is.
+
+`robots.txt` and `llms.txt` sit at the site root alongside them.
+`robots.txt` is deliberately permissive - it explicitly allows both
+"live-answer" AI crawlers (the kind that fetch a page to answer a user's
+specific question, e.g. an assistant with browsing) and "training" AI
+crawlers (GPTBot, CCBot, Google-Extended, etc.), since this project has
+no reason to withhold a small free community project's public pages from
+either. `llms.txt` is a separate, newer, plain-markdown convention some
+AI assistants read directly for a quick, structured summary of a site -
+distinct from `robots.txt`, which only governs crawling permission, not
+content summarization.
+
+None of this GUARANTEES indexing by itself - it removes the technical
+barriers and gives crawlers accurate information once they visit, but
+getting a brand-new site actually crawled the first time still benefits
+from telling the search engines it exists:
+
+- [Google Search Console](https://search.google.com/search-console) -
+  add the site, verify ownership, and submit `sitemap.xml` directly
+  rather than waiting for Google to discover it on its own.
+- [Bing Webmaster Tools](https://www.bing.com/webmasters) - same idea;
+  Bing's index also feeds several AI assistants that don't crawl the web
+  themselves.
+
+Both are one-off, free, manual steps outside of anything this codebase
+can do - there's no API call or file that submits a site to a search
+engine on your behalf.
 
 ## Notes
 

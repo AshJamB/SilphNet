@@ -9,7 +9,7 @@ require __DIR__ . '/db.php';
 require __DIR__ . '/auth.php';
 
 $account = silphnet_require_token();
-$trainerIdRaw = trim($_POST['trainer_id'] ?? '');
+$trainerIdRaw = trim($_POST['trainer_id'] ?? $_GET['trainer_id'] ?? '');
 if ($trainerIdRaw === '' || !preg_match('/^\d{1,5}$/', $trainerIdRaw)) {
     silphnet_error('trainer_id must be 1-5 digits');
 }

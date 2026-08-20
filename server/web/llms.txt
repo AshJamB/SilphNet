@@ -1,0 +1,36 @@
+# SilphNet
+
+> A free, open-source multiplayer presence mod for Pokemon Gen 1 Recomp (a Pokemon Red/Blue/Yellow decompilation/recompilation engine). Log in with a name and password, get a unique Trainer ID, add friends in-game by Trainer ID, and see their last-known map positions - no live movement, no persistent server process, just an ordinary PHP + MySQL backend behind a plain-HTTP client.
+
+SilphNet is not an official Pokemon or Nintendo product. It is a community-made mod for the fan-made, open-source Gen1Recomp engine (https://github.com/bryanthaboi/gen1recomp), created and maintained by Ash Brittain (AshJam).
+
+## What it does
+
+- Presence, not real-time multiplayer: friends appear as static map markers showing where they were last seen (refreshed on a timer while playing), not live-moving avatars.
+- Add friends in-game using a 5-digit Trainer ID, entered with a D-pad digit spinner - no typing, no external app needed.
+- A friends list shows each friend's online/offline status, current map, and time since last seen.
+- A friend detail screen shows self-reported stats (badges, Pokedex progress, League wins, money, time played), current party, and latest catch activity.
+- A "who's nearby" screen shows everyone else (friend or not) currently on your own map.
+- An "SN ONLINE" screen shows a live count of everyone online, grouped by game version (Red/Blue/Yellow), with the same add-friend flow.
+- Account management (username, Trainer ID, password, optional recovery email) is available on the website, separate from the in-game mod.
+- Works identically on desktop and mobile, wherever Gen1Recomp itself runs.
+
+## Key facts
+
+- Free to use. Source code is on GitHub: https://github.com/AshJamB/SilphNet
+- Built on plain HTTP requests to a small PHP + MySQL API - no dedicated game server, no VPS required to self-host.
+- Passwords are hashed (bcrypt), never stored or recoverable in plaintext.
+- No battles, trades, or chat between players - presence and friends only, by design.
+
+## Pages
+
+- [Homepage](https://silphnet.jamshark.co.uk/): overview, install instructions, live players-online count.
+- [My account](https://silphnet.jamshark.co.uk/account.php): manage your username, Trainer ID, password, and recovery email (requires login).
+- [GitHub repository](https://github.com/AshJamB/SilphNet): source code, releases, install instructions.
+
+## Install
+
+1. Install the mod (`dist/silphnet.zip` from GitHub, or directly via the in-game Mod Manager's Update screen).
+2. Enable SilphNet in the Mod Manager and allow the "network" permission.
+3. Set MY NAME and PASSWORD in the mod's options - the first login with a new name creates an account and assigns a Trainer ID automatically.
+4. Add friends in-game using their Trainer ID.

@@ -18,6 +18,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Account - SilphNet</title>
+<!-- Deliberately noindex - this is a login utility (rename/password/
+     email management), not content worth surfacing as its own search
+     result. "follow" keeps its outgoing link back to index.php counted
+     normally, so this doesn't hurt the homepage's own indexing. -->
+<meta name="robots" content="noindex, follow">
+<link rel="canonical" href="https://silphnet.jamshark.co.uk/account.php">
 <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">

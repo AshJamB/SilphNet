@@ -35,11 +35,60 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SilphNet - Multiplayer Presence Mod for Gen 1 Recomp</title>
 <meta name="description" content="A multiplayer presence mod for Pokemon Gen 1 Recomp. Log in, add friends by Trainer ID, and see their last-known positions - no server process required.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://silphnet.jamshark.co.uk/">
 <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
 <link rel="icon" type="image/png" sizes="48x48" href="assets/favicon-48.png">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/favicon-180.png">
+
+<!-- Open Graph - controls how this page previews when shared (Discord,
+     Twitter/X, Facebook, iMessage, etc.) and is also read by several AI
+     assistants when summarizing a link. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="SilphNet - Multiplayer Presence Mod for Gen 1 Recomp">
+<meta property="og:description" content="A multiplayer presence mod for Pokemon Gen 1 Recomp. Log in, add friends by Trainer ID, and see their last-known positions - no server process required, works on desktop and mobile.">
+<meta property="og:url" content="https://silphnet.jamshark.co.uk/">
+<meta property="og:image" content="https://silphnet.jamshark.co.uk/assets/silphnet-banner.png">
+<meta property="og:site_name" content="SilphNet">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="SilphNet - Multiplayer Presence Mod for Gen 1 Recomp">
+<meta name="twitter:description" content="A multiplayer presence mod for Pokemon Gen 1 Recomp. Log in, add friends by Trainer ID, and see their last-known positions.">
+<meta name="twitter:image" content="https://silphnet.jamshark.co.uk/assets/silphnet-banner.png">
+
+<!-- JSON-LD structured data (schema.org) - helps both search engines and
+     AI assistants understand what this page/project actually is, beyond
+     just the visible text - e.g. that it's a piece of free software with
+     a real download location and source repo, not just a generic page
+     about Pokemon. SoftwareApplication is the closest schema.org type to
+     "a game mod"; there's no more specific "mod" type in the vocabulary. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "SilphNet",
+  "applicationCategory": "GameApplication",
+  "operatingSystem": "Cross-platform (Gen1Recomp: Windows, macOS, Linux, Android)",
+  "description": "A multiplayer presence mod for Pokemon Gen 1 Recomp. Log in with a name and password, get a unique Trainer ID, add friends in-game, and see their last-known positions on the map - no live movement, no server process required beyond ordinary PHP and MySQL hosting.",
+  "url": "https://silphnet.jamshark.co.uk/",
+  "downloadUrl": "https://github.com/AshJamB/SilphNet",
+  "codeRepository": "https://github.com/AshJamB/SilphNet",
+  "author": {
+    "@type": "Person",
+    "name": "Ash Brittain",
+    "alternateName": "AshJam",
+    "url": "https://ash.jamtv.co.uk"
+  },
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "GBP"
+  },
+  "image": "https://silphnet.jamshark.co.uk/assets/silphnet-banner.png"
+}
+</script>
 <style>
   :root {
     --bg: #0b0e14;

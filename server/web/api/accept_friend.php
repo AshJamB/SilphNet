@@ -8,7 +8,7 @@ require __DIR__ . '/db.php';
 require __DIR__ . '/auth.php';
 
 $account       = silphnet_require_token();
-$requesterName = trim($_POST['requester_name'] ?? '');
+$requesterName = trim($_POST['requester_name'] ?? $_GET['requester_name'] ?? '');
 if ($requesterName === '') silphnet_error('missing requester_name');
 $requesterName = substr($requesterName, 0, 16);
 
