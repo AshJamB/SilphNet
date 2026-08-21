@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.12.1)
+-- SilphNet - async presence + friends (v1.12.2)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -1500,28 +1500,63 @@ return function(mod)
   -- Built fresh per search (see findSafeSignTile) from whichever facing
   -- the player actually entered with, so "sideways" always means
   -- perpendicular to THAT specific entry, not a fixed screen direction.
+  --
+  -- IMPORTANT LIMITATION (confirmed directly against the engine's own
+  -- MapOverview.build(), src/world/MapOverview.lua): the collision grid
+  -- this whole search reads from (mod.world:mapOverview().rows) is built
+  -- purely from STATIC map tile collision (map:isWalkableCell(x,y)) - it
+  -- has no idea where any NPC or decoration currently stands, including a
+  -- gym's own statues. Those are placed as ordinary map objects, not
+  -- baked into the tile grid, so a tile directly under a statue still
+  -- reads as walkable ground here even though something is visibly
+  -- sitting on it. There is no mod-facing API to enumerate NPC positions
+  -- on a map (WorldAPI only offers npc(mapId, nameOrIndex) - a lookup by
+  -- name, not a "list everything here" call) - so this project can't
+  -- detect that case in general without hardcoding a specific map's real
+  -- layout, which it deliberately never does (ships no ROM data).
+  --
+  -- Widened side range (1-3, was 1-2) and search depth (2-8, was 2-6)
+  -- after a real report (Viridian Gym) of the sign landing on top of a
+  -- statue - purely a numbers-game mitigation (more candidate tiles tried
+  -- = lower odds of hitting the one a statue happens to occupy), not a
+  -- guarantee. SIGN_AVOID_TILES below is the actual fix path for a
+  -- specific reported overlap: once a player names the exact spot, that
+  -- one tile gets excluded outright rather than relying on chance.
   local function buildSignSearchOffsets(facing)
     local fwd = FORWARD_BY_FACING[facing] or FORWARD_BY_FACING.up
     -- Perpendicular unit vector (rotate fwd 90 degrees) - "left of the
     -- aisle" and "right of the aisle" from the player's own point of view.
     local side = { -fwd[2], fwd[1] }
     local offsets = {}
-    -- Anchor a few tiles past the doorway (distance 2-5), never distance
+    -- Anchor a few tiles past the doorway (distance 2-8), never distance
     -- 0-1, so nothing can ever land in the door tile or its immediate
-    -- threshold. At each depth, try sideways-of-the-aisle first (1-2
-    -- tiles either side), straight ahead only as a last resort at that
-    -- depth, before moving deeper and repeating - this consistently
-    -- prefers "beside the path a few steps in" over "blocking the path"
-    -- or "still basically in the doorway."
-    for depth = 2, 6 do
+    -- threshold. At each depth, try sideways-of-the-aisle first (1-3
+    -- tiles either side, furthest first), straight ahead only as a last
+    -- resort at that depth, before moving deeper and repeating - this
+    -- consistently prefers "beside the path a few steps in" over
+    -- "blocking the path" or "still basically in the doorway."
+    for depth = 2, 8 do
       local ax, ay = fwd[1] * depth, fwd[2] * depth
-      for _, s in ipairs({ 2, -2, 1, -1 }) do
+      for _, s in ipairs({ 3, -3, 2, -2, 1, -1 }) do
         offsets[#offsets + 1] = { ax + side[1] * s, ay + side[2] * s }
       end
       offsets[#offsets + 1] = { ax, ay } -- dead ahead, only if nothing beside it worked
     end
     return offsets
   end
+
+  -- Specific tiles a real player has actually reported a sign overlapping
+  -- something on (a statue, a gym leader's own spot, etc.) - keyed by
+  -- mapId, each entry a set of "x,y" strings. Deliberately NOT populated
+  -- from any pre-existing map data or test fixture (this project ships no
+  -- ROM data) - every entry here is a specific tile a real person on a
+  -- real device actually saw a problem on and reported back, the same
+  -- category of information as a player telling us a map's in-game name.
+  -- Empty for now - add an entry here (see the comment above
+  -- findSafeSignTile for how) once a report includes exact coordinates,
+  -- e.g. from the mod.log:info() line spawnGymSign/spawnLeagueSign now
+  -- emit on every spawn.
+  local SIGN_AVOID_TILES = {}
 
   -- Last-resort offsets if nothing in the forward/sideways search (out to
   -- depth 6) turned up a walkable, unoccupied tile - e.g. a very small
@@ -1556,6 +1591,7 @@ return function(mod)
     local ok, overview = pcall(mod.world.mapOverview, mod.world)
     if not ok or not overview or type(overview.rows) ~= "table" then return nil end
 
+    local avoid = SIGN_AVOID_TILES[mapId]
     local function tryOffsets(offsets)
       for _, off in ipairs(offsets) do
         local x, y = cur.x + off[1], cur.y + off[2]
@@ -1564,7 +1600,7 @@ return function(mod)
           local c = row and row:sub(x + 1, x + 1)
           if c and isWalkableSignChar(c) then
             local key = x .. "," .. y
-            if not (occupied and occupied[key]) then return x, y end
+            if not (occupied and occupied[key]) and not (avoid and avoid[key]) then return x, y end
           end
         end
       end
@@ -1622,6 +1658,10 @@ return function(mod)
     end
     gymSignNpc = { npcId = npcId, mapId = mapId }
     currentGymBadge = badgeId
+    -- Logged so a real overlap report (sign on top of a statue etc.) can
+    -- include the exact tile - see SIGN_AVOID_TILES above for why this is
+    -- the actual fix path rather than trying to guess harder up front.
+    mod.log:info("SilphNet: gym sign placed on %s at (%d,%d)", tostring(mapId), x, y)
   end
 
   -- League leaderboard sign - same single-slot shape as the gym sign
@@ -1653,6 +1693,7 @@ return function(mod)
       return
     end
     leagueSignNpc = { npcId = npcId, mapId = mapId }
+    mod.log:info("SilphNet: league sign placed on %s at (%d,%d)", tostring(mapId), x, y)
     fireLeagueLeaderboardFetch()
   end
 
@@ -3219,14 +3260,54 @@ return function(mod)
   mod.events:on("world.stepped", function(ev)
     myMap, myX, myY = ev.mapId, ev.x, ev.y
     local cur = mod.world:current(); if cur then myFacing = cur.facing end
-    -- Drives the presence/friends/pending 30s timer (see the long comment
-    -- above pumpPresenceTimer for why this replaced the old input.step
-    -- hook) plus a general-purpose drain for anything not covered by a
-    -- screen's own update(dt) call. world.stepped is documented as a "hot
-    -- path" (Reference-Events), so this stays cheap either way: draining a
-    -- thread channel and a handful of table reads/writes, with the actual
-    -- network calls gated behind the PRESENCE_INTERVAL check so they don't
-    -- fire on every single step.
+    -- Presence/friends/pending pumping and HTTP draining moved to the
+    -- core.update hook below (see its own comment for why) - this handler
+    -- now only tracks the player's own position, which is correctly
+    -- step-gated (there's nothing to update here while standing still).
+  end)
+
+  -- Reported bug: standing still in the overworld for more than a few
+  -- minutes gets you marked OFFLINE server-side, even though the game is
+  -- genuinely still open and being played - not walking away, just not
+  -- moving. Root cause: pumpPresenceTimer (and drainHttpResults) were only
+  -- ever invoked from world.stepped, and world.stepped is documented
+  -- (Reference-Events) to fire ONLY on an actual step - so a player who
+  -- simply stops walking stops ticking the 30s ping timer at all, and
+  -- last_seen on the server eventually falls outside the 300s online
+  -- window (see online_by_version.php/public_online_status.php) even
+  -- though they never left.
+  --
+  -- Checked every other documented event for something that fires on a
+  -- real-time interval independent of movement - there isn't one among
+  -- Reference-Events (map/battle/pokemon/script events are all tied to a
+  -- specific gameplay moment). core.update, however, is a documented HOOK
+  -- (Reference-Hooks), not an event - confirmed directly against the
+  -- engine's own src/core/PlatformHooks.lua: `ModRuntime.call("core.update",
+  -- function(g, d) g:update(d) end, game, dt)` wraps the game's own
+  -- love.update-driven tick itself, completely independent of whether the
+  -- player is standing still, in a menu, or mid-battle. This is exactly
+  -- the per-frame, movement-independent hook the earlier pump() comment
+  -- (see drainHttpResults above) said didn't exist among events - it just
+  -- wasn't a hook this file had wired up yet.
+  --
+  -- MUST always call nextFn(g, dt) - skipping it would stop the entire
+  -- game from updating, not just this mod's own logic. Wrapped in its own
+  -- pcall (not nextFn's call, which must never be swallowed) so a genuine
+  -- error in pumpPresenceTimer/drainHttpResults can never take the whole
+  -- game down from inside a hook that runs every single frame.
+  --
+  -- pumpPresenceTimer itself already measures real elapsed OS seconds
+  -- (os.time(), not an accumulated dt - see its own comment) and no-ops
+  -- entirely unless authState == "authed" and inOverworld, so calling it
+  -- up to 60x/sec here is cheap and never double-fires the 30s cycle
+  -- early - it still only actually pings once PRESENCE_INTERVAL real
+  -- seconds have genuinely passed, standing still or not. The existing
+  -- "goes offline after ~5 minutes of no ping" server-side rule is
+  -- completely unchanged (see online_by_version.php's own comment on that
+  -- window) - this only fixes the client still SENDING that ping while
+  -- idle, never touches what counts as stale on the server.
+  mod.hooks:wrap("core.update", function(nextFn, g, dt)
+    nextFn(g, dt)
     pcall(drainHttpResults)
     pcall(pumpPresenceTimer)
   end)
@@ -3689,14 +3770,48 @@ return function(mod)
         -- permanently stale first snapshot.
         if not leagueLeaderboardBusy then fireLeagueLeaderboardFetch() end
         -- Own league-clear count, shown on this screen per the owner's
-        -- request ("show somewhere your own amount of league wins") -
-        -- read once at screen-open time straight from the local save via
-        -- readStatsSnapshot (the exact same field already uploaded as
-        -- league_wins on every stats snapshot), not from the server -
-        -- this needs no network round trip and is correct even before the
-        -- leaderboard fetch above has come back.
-        local myLeagueWins = 0
-        pcall(function() myLeagueWins = readStatsSnapshot().leagueWins or 0 end)
+        -- request ("show somewhere your own amount of league wins").
+        --
+        -- Deliberately NOT the local save's own #save.hallOfFame/
+        -- save.hallOfFame.count - that's scoped to THIS ONE cartridge
+        -- only, while every other number on this screen (and the
+        -- leaderboard rank itself) is the COMBINED total across every
+        -- game_version this account has ever uploaded (see
+        -- league_leaderboard.php's own comment on why "collapse across
+        -- saves" is the right call for a leaderboard specifically). A
+        -- player who cleared the league on RED but is standing at this
+        -- sign on a fresh YELLOW save would otherwise see "YOUR CLEARS 0"
+        -- right next to a leaderboard that already credits them with 1 -
+        -- confusingly inconsistent, and exactly what was reported back
+        -- ("it says 0, but I have beaten the league" - true for the
+        -- save they were standing in, not for their account overall).
+        --
+        -- So this reads the SAME combined number every other row on this
+        -- screen already comes from: look the caller's own accountId up
+        -- inside leagueLeaderboard.all (already fetched for the ALL
+        -- PLAYERS page, no second request needed) once it's arrived.
+        -- Falls back to the local single-save reading only until that
+        -- fetch has come back at least once, so this screen never shows
+        -- a blank/dash before the network round trip completes.
+        local function myLeagueClears()
+          if leagueLeaderboard and leagueLeaderboard.all then
+            for _, row in ipairs(leagueLeaderboard.all) do
+              if row.account_id and accountId and tostring(row.account_id) == tostring(accountId) then
+                return tonumber(row.total) or 0
+              end
+            end
+            -- Fetched, but this account has a combined total of 0 (never
+            -- cleared on ANY save) - league_leaderboard.php excludes 0
+            -- totals from the list entirely, so "not found" here
+            -- genuinely means 0, not "still loading."
+            return 0
+          end
+          -- Leaderboard hasn't come back yet - best available answer is
+          -- this one save's own count, same as before this fix.
+          local mine = 0
+          pcall(function() mine = readStatsSnapshot().leagueWins or 0 end)
+          return mine
+        end
         local self = { game = g, isOpaque = true, page = 1, index = 1, sortAsc = false }
         local function currentList()
           if not leagueLeaderboard then return nil end
@@ -3746,7 +3861,7 @@ return function(mod)
           -- Own clear count, always visible regardless of which list/sort
           -- is showing - per the owner's request to surface this
           -- somewhere on this screen.
-          Font.draw(("YOUR CLEARS " .. tostring(myLeagueWins)):sub(1, 16), 16, 32)
+          Font.draw(("YOUR CLEARS " .. tostring(myLeagueClears())):sub(1, 16), 16, 32)
           if leagueLeaderboard == nil then
             -- Same "nil means haven't heard back yet" convention as
             -- onlineByVersion/onlineCount elsewhere in this file.

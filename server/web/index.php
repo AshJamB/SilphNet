@@ -178,6 +178,26 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   .online-pill strong { color: var(--text); }
   .online-pill.is-loading .dot { background: var(--text-dim); box-shadow: none; }
 
+  /* Secondary stat-counter row (Pokemon Seen/Caught, Badges, League
+     Victories) - sits directly under the online-pill, same pill shape and
+     palette but smaller/quieter so four of them read as secondary to the
+     one main "players online" pill above. Each opens the same kind of
+     version-drilldown modal the online pill does, just for a static
+     aggregate total instead of a live player list. */
+  .stat-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 0 auto 8px; }
+  .stat-pill {
+    display: inline-flex; align-items: center; gap: 7px; background: var(--panel);
+    border: 1px solid var(--panel-border); border-radius: 999px; padding: 6px 14px;
+    font-size: 0.82rem; cursor: pointer; color: var(--text-dim);
+  }
+  .stat-pill:hover { border-color: var(--blue); color: var(--text); }
+  .stat-pill .stat-icon { width: 15px; height: 15px; flex-shrink: 0; color: var(--orange); }
+  .stat-pill strong { color: var(--text); }
+  .stat-pill.is-loading { opacity: 0.6; cursor: default; }
+  @media (max-width: 480px) {
+    .stat-pill { font-size: 0.78rem; padding: 6px 11px; }
+  }
+
   .modal-overlay {
     display: none; position: fixed; inset: 0; background: rgba(6, 8, 12, 0.72);
     align-items: center; justify-content: center; z-index: 50; padding: 20px;
@@ -196,6 +216,12 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   }
   .version-row:hover { border-color: var(--blue); }
   .version-row:last-of-type { margin-bottom: 0; }
+  /* Used for the stat-by-version modal's rows, which are plain <div>s (no
+     further drilldown, unlike the online modal's clickable version rows
+     above) - same look, just without the pointer cursor/hover affordance
+     that would wrongly suggest these are clickable too. */
+  .version-row.static { cursor: default; }
+  .version-row.static:hover { border-color: transparent; }
   .version-row .v-name { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text); }
   .version-row .v-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .version-row .v-count-wrap { display: flex; align-items: center; gap: 8px; }
@@ -298,6 +324,38 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
       <button type="button" class="online-pill is-loading" id="onlinePill" aria-haspopup="dialog">
         <span class="dot"></span>
         <span id="onlinePillText">Checking players online&hellip;</span>
+      </button>
+    </div>
+    <div class="stat-row" id="statRow">
+      <button type="button" class="stat-pill is-loading" id="statPillSeen" aria-haspopup="dialog" data-stat="pokedex_seen">
+        <svg class="stat-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <ellipse cx="8" cy="8" rx="6.5" ry="4" stroke="currentColor" stroke-width="1.3"/>
+          <circle cx="8" cy="8" r="1.7" fill="currentColor"/>
+        </svg>
+        <span class="stat-pill-text">&hellip;</span>
+      </button>
+      <button type="button" class="stat-pill is-loading" id="statPillCaught" aria-haspopup="dialog" data-stat="pokedex_caught">
+        <svg class="stat-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="1.5" y1="8" x2="14.5" y2="8" stroke="currentColor" stroke-width="1.3"/>
+          <circle cx="8" cy="8" r="1.7" fill="currentColor"/>
+        </svg>
+        <span class="stat-pill-text">&hellip;</span>
+      </button>
+      <button type="button" class="stat-pill is-loading" id="statPillBadges" aria-haspopup="dialog" data-stat="badges">
+        <svg class="stat-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M8 1.2 14 4v4.2C14 12 11.4 14.2 8 15c-3.4-.8-6-3-6-6.8V4Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        </svg>
+        <span class="stat-pill-text">&hellip;</span>
+      </button>
+      <button type="button" class="stat-pill is-loading" id="statPillLeague" aria-haspopup="dialog" data-stat="league_wins">
+        <svg class="stat-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M4 2.5h8v3.2c0 2.4-1.8 4.3-4 4.3s-4-1.9-4-4.3V2.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          <path d="M4 3.2H2.2c0 1.9.7 3.1 2.1 3.5M12 3.2h1.8c0 1.9-.7 3.1-2.1 3.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+          <line x1="8" y1="10" x2="8" y2="12.3" stroke="currentColor" stroke-width="1.3"/>
+          <path d="M5.3 14.5c0-1 1.2-1.7 2.7-1.7s2.7.7 2.7 1.7Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        </svg>
+        <span class="stat-pill-text">&hellip;</span>
       </button>
     </div>
     <div class="cta-row">
@@ -425,6 +483,26 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
     <div id="onlineVersionRows"></div>
     <div id="onlinePlayerRows" style="display: none;"></div>
     <button type="button" class="modal-close" id="onlineModalClose">Close</button>
+  </div>
+</div>
+
+<!-- Community stat-by-version modal - shares the same .modal-overlay/
+     .modal-box/.version-row/.v-swatch CSS the online-pill modal above
+     uses, but is its own separate modal instance (own ids, own JS
+     handlers) rather than a generalized/shared modal component. These are
+     static aggregate totals with no further per-player drilldown (no
+     "back" button, no second level), so reusing the online modal's
+     two-view state machine would mean bolting an unused back/forward path
+     onto it just to fit a shape it doesn't need - a second small modal
+     following the same visual pattern is simpler and keeps the existing
+     online-drilldown code (which DOES need that two-view state machine)
+     completely untouched. -->
+<div class="modal-overlay" id="statModal" role="dialog" aria-modal="true" aria-labelledby="statModalTitle">
+  <div class="modal-box">
+    <h3 id="statModalTitle">Stat by version</h3>
+    <p class="modal-sub" id="statModalSub">Loading&hellip;</p>
+    <div id="statVersionRows"></div>
+    <button type="button" class="modal-close" id="statModalClose">Close</button>
   </div>
 </div>
 
@@ -703,12 +781,92 @@ async function fetchCommunityStats() {
         ticker.classList.remove('fade');
       }, 400); // matches the 0.4s opacity transition in CSS
     }, TICKER_INTERVAL_MS);
+
+    // Stat-counter row (Pokemon Seen/Caught, Badges, League Victories) -
+    // rendered from this SAME already-fetched response, no second network
+    // round trip. Unlike the online-pill's player-list drilldown (which
+    // genuinely needs a fresh fetch since presence is live/changing),
+    // these are static aggregate totals that don't change mid-visit, so
+    // caching the one fetch this page already makes for the ticker is
+    // enough to drive both the pill numbers AND the per-version modal.
+    communityStatsData = data;
+    renderStatPills(data);
   } catch (e) {
     // Fails soft - the ticker just never appears, no broken/empty bar,
     // same degrade-gracefully rule as the GitHub release card.
     ticker.style.display = 'none';
+    for (const cfg of Object.values(STAT_META)) {
+      const pill = document.getElementById(cfg.pillId);
+      pill.classList.remove('is-loading');
+      pill.querySelector('.stat-pill-text').textContent = 'Stats unavailable';
+    }
   }
 }
+
+// Static per-stat metadata for the secondary counter row under the
+// online-pill - each maps a friend_stats column (as returned by
+// public_community_stats.php's "versions" array) to its pill's DOM id and
+// modal copy. Kept as one small table rather than four near-duplicate
+// blocks of pill/modal-wiring code below.
+const STAT_META = {
+  pokedex_seen: { pillId: 'statPillSeen', label: 'Pokemon Seen', modalTitle: 'Pokemon Seen by Version' },
+  pokedex_caught: { pillId: 'statPillCaught', label: 'Pokemon Caught', modalTitle: 'Pokemon Caught by Version' },
+  badges: { pillId: 'statPillBadges', label: 'Gym Badges Earned', modalTitle: 'Gym Badges Earned by Version' },
+  league_wins: { pillId: 'statPillLeague', label: 'League Victories', modalTitle: 'League Victories by Version' },
+};
+let communityStatsData = null; // cached community-stats response, reused by every stat pill's modal
+
+function renderStatPills(data) {
+  for (const [key, cfg] of Object.entries(STAT_META)) {
+    const pill = document.getElementById(cfg.pillId);
+    pill.classList.remove('is-loading');
+    const total = data.versions.reduce((sum, v) => sum + (v[key] || 0), 0);
+    pill.querySelector('.stat-pill-text').innerHTML = `<strong>${total.toLocaleString()}</strong> ${cfg.label}`;
+  }
+}
+
+function showStatModal(statKey) {
+  const cfg = STAT_META[statKey];
+  document.getElementById('statModalTitle').textContent = cfg.modalTitle;
+
+  const rows = document.getElementById('statVersionRows');
+  rows.innerHTML = '';
+
+  if (!communityStatsData) {
+    document.getElementById('statModalSub').textContent = 'Stats unavailable right now.';
+    statModal.classList.add('open');
+    return;
+  }
+
+  document.getElementById('statModalSub').textContent = 'Totals by game version.';
+  for (const v of communityStatsData.versions) {
+    const meta = VERSION_META[v.game_version] || { label: v.game_version, swatch: '' };
+    const row = document.createElement('div');
+    row.className = 'version-row static';
+    row.innerHTML = `
+      <span class="v-name"><span class="v-swatch ${meta.swatch}"></span>${meta.label}</span>
+      <span class="v-count-wrap"><span class="v-count">${(v[statKey] || 0).toLocaleString()}</span></span>
+    `;
+    rows.appendChild(row);
+  }
+  statModal.classList.add('open');
+}
+
+const statModal = document.getElementById('statModal');
+document.getElementById('statRow').addEventListener('click', (e) => {
+  const btn = e.target.closest('.stat-pill');
+  if (!btn) return;
+  showStatModal(btn.dataset.stat);
+});
+document.getElementById('statModalClose').addEventListener('click', () => {
+  statModal.classList.remove('open');
+});
+statModal.addEventListener('click', (e) => {
+  if (e.target === statModal) statModal.classList.remove('open');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') statModal.classList.remove('open');
+});
 
 fetchCommunityStats();
 </script>
