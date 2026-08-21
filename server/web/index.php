@@ -204,6 +204,8 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   .v-swatch.red { background: #e05a5a; }
   .v-swatch.blue { background: #4fc3f7; }
   .v-swatch.yellow { background: #f6d648; }
+  .v-swatch.gold { background: #c9a13b; }
+  .v-swatch.silver { background: #b9c0c6; }
   .player-list { margin-bottom: 4px; }
   .player-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -368,6 +370,10 @@ const VERSION_META = {
   RED: { label: 'Red', swatch: 'red' },
   BLUE: { label: 'Blue', swatch: 'blue' },
   YELLOW: { label: 'Yellow', swatch: 'yellow' },
+  // Gen 2, currently Beta in the Gen1Recomp launcher - same treatment as
+  // the Gen 1 versions above, just with their own swatch colours.
+  GOLD: { label: 'Gold', swatch: 'gold' },
+  SILVER: { label: 'Silver', swatch: 'silver' },
 };
 let lastOnlineData = null;   // cached summary, so "back" doesn't need a re-fetch
 

@@ -1,10 +1,10 @@
 <?php
 // SilphNet presence - upsert the caller's last-known position for one
-// game_version (RED/BLUE/YELLOW/GOLD/UNKNOWN - GOLD accepted for forward
-// compatibility even though this mod targets Gen 1 only and main.lua
-// never actually sends it today; the real engine field it's read from,
-// game.save.version, can genuinely be "gold" per GameVersion.VERSIONS,
-// so accepting it here now avoids a second migration later). Requires a
+// game_version (RED/BLUE/YELLOW/GOLD/SILVER/UNKNOWN - GOLD/SILVER are Gen 2,
+// currently Beta in the launcher; the real engine field this is read from,
+// game.save.version, is genuinely one of these per GameVersion.VERSIONS,
+// and main.lua now sends GOLD/SILVER as-is rather than collapsing them to
+// UNKNOWN). Requires a
 // valid session token now (see login.php/register.php/login_token.php) -
 // a bare account_id is no longer accepted on its own, closing the
 // "anyone can POST as anyone" gap the first version of this endpoint had.
@@ -30,7 +30,7 @@ if ($mapId === '' || $x === null || $y === null) {
 if (!preg_match('/^-?\d+$/', (string)$x) || !preg_match('/^-?\d+$/', (string)$y)) {
     silphnet_error('x and y must be integers');
 }
-if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'UNKNOWN'], true)) $version = 'UNKNOWN';
+if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'UNKNOWN'], true)) $version = 'UNKNOWN';
 
 $mapId  = substr($mapId, 0, 64);
 $facing = substr($facing, 0, 8);

@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS presence (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   account_id   VARCHAR(16) NOT NULL,
-  game_version VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN', -- RED | BLUE | YELLOW | GOLD | UNKNOWN
+  game_version VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN', -- RED | BLUE | YELLOW | GOLD | SILVER | UNKNOWN
   map_id       VARCHAR(64) NOT NULL,
   x            INT NOT NULL,
   y            INT NOT NULL,
@@ -99,9 +99,13 @@ CREATE TABLE IF NOT EXISTS friends (
 -- than presence (stats don't need to be second-fresh - see stats.php).
 -- One row per (account_id, game_version), same key shape as presence, for
 -- the same reason: an account can have several active saves tracked as
--- separate "characters". league_wins is #save.hallOfFame entries, badges
--- is derived client-side from save.inventory + constants.badges (see
--- main.lua's countBadges() - Badges.count() itself isn't mod-accessible).
+-- separate "characters". league_wins is #save.hallOfFame entries on a
+-- Gen 1 save (save.hallOfFame.count on a Gen 2/Gold/Silver save - a
+-- differently-shaped field there, not the same one read differently).
+-- badges is derived client-side: from save.inventory + constants.badges
+-- on Gen 1 (Badges.count() itself isn't mod-accessible), or from
+-- save.player.badges + save.player.kantoBadges directly on Gen 2, which
+-- carries no badge items at all - see main.lua's countBadges()/isGen2().
 -- play_seconds is a normalized TOTAL SECONDS count - save.playTime has
 -- two possible shapes engine-side (plain seconds, or an {hours,minutes,
 -- seconds,frames} table), both collapsed to one plain integer client-side

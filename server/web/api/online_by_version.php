@@ -1,14 +1,14 @@
 <?php
 // SilphNet - everyone currently online, GLOBALLY (not just friends),
 // grouped by game_version - the data source for the new SN ONLINE
-// screen's per-version pages (RED/BLUE/YELLOW), which each list that
-// version's online players the same way nearby.php's single flat list
-// already does for "who's on my map" (name, trainer_id, add-friend
-// status). Replaces online_count.php's single flat number for this
-// screen specifically - online_count.php itself is unchanged and still
-// used elsewhere (its own single "N PLAYERS ONLINE NOW" figure, if kept
-// on a summary line here, would just be sum(counts) over every version
-// anyway, so this endpoint alone is enough for the whole screen).
+// screen's per-version pages (RED/BLUE/YELLOW/GOLD/SILVER), which each
+// list that version's online players the same way nearby.php's single
+// flat list already does for "who's on my map" (name, trainer_id,
+// add-friend status). Replaces online_count.php's single flat number for
+// this screen specifically - online_count.php itself is unchanged and
+// still used elsewhere (its own single "N PLAYERS ONLINE NOW" figure, if
+// kept on a summary line here, would just be sum(counts) over every
+// version anyway, so this endpoint alone is enough for the whole screen).
 //
 // GET: token
 // Returns: {"ok":true,"versions":[
@@ -31,24 +31,24 @@
 // account's client hasn't sent a real game.save.version yet (see
 // ping.php's re-key comment), which isn't a genuine "version" a player is
 // playing so much as a not-yet-identified one; showing an "UNKNOWN: 2
-// ONLINE" page would be confusing rather than useful. Only RED/BLUE/
-// YELLOW are grouped here - GOLD is accepted elsewhere for forward-
-// compatibility but this mod is Gen 1 only and no real client sends it
-// today, so an empty GOLD group would just be permanent dead weight on
-// this screen.
+// ONLINE" page would be confusing rather than useful. RED/BLUE/YELLOW
+// (Gen 1) and now GOLD/SILVER (Gen 2, Beta) are all grouped here -
+// main.lua sends GOLD/SILVER as a real game_version as of the version
+// that added Gen 2 support, not just forward-compatibly accepted and
+// unused.
 //
 // Versions with zero online players are still included in the "versions"
 // array (with an empty "players" array and count 0) rather than omitted -
 // the client-side summary page wants to show "RED: 0 ONLINE" rather than
-// silently drop a version, so this endpoint always returns exactly three
-// entries, in a fixed RED/BLUE/YELLOW order, regardless of how many are
-// actually populated.
+// silently drop a version, so this endpoint always returns exactly five
+// entries, in a fixed RED/BLUE/YELLOW/GOLD/SILVER order, regardless of how
+// many are actually populated.
 
 require __DIR__ . '/db.php';
 require __DIR__ . '/auth.php';
 
 const SILPHNET_ONLINE_AFTER_SECONDS = 300;
-const SILPHNET_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW'];
+const SILPHNET_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER'];
 
 $account = silphnet_require_token();
 

@@ -18,7 +18,7 @@
 // information reachable from the website too, without requiring a login
 // just to look.
 //
-// GET: game_version=RED|BLUE|YELLOW
+// GET: game_version=RED|BLUE|YELLOW|GOLD|SILVER
 // Returns: {"ok":true,"game_version":"RED","count":4,"players":[
 //   {"name":"...","trainer_id":"04815","map_id":"VICTORY_ROAD"}, ...
 // ]}
@@ -41,11 +41,11 @@
 require __DIR__ . '/db.php';
 
 const SILPHNET_PUBLIC_ONLINE_AFTER_SECONDS = 300;
-const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW'];
+const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER'];
 
 $version = strtoupper(trim($_GET['game_version'] ?? ''));
 if (!in_array($version, SILPHNET_PUBLIC_TRACKED_VERSIONS, true)) {
-    silphnet_error('game_version must be one of RED, BLUE, YELLOW');
+    silphnet_error('game_version must be one of RED, BLUE, YELLOW, GOLD, SILVER');
 }
 
 try {

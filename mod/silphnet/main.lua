@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.10.0)
+-- SilphNet - async presence + friends (v1.11.0)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -280,25 +280,40 @@ return function(mod)
   end
 
   -- game.save.version is confirmed real (see the comment above gameVersion's
-  -- declaration) - "red"/"blue"/"yellow"/"gold", always non-nil once a
-  -- save exists. Uppercased to match this project's existing
-  -- RED/BLUE/YELLOW/UNKNOWN convention (schema.sql, every server
-  -- endpoint's validation list). GOLD maps to UNKNOWN rather than being
-  -- sent as-is - this mod is Gen 1 only (friend markers, presence, stats
-  -- reading all assume Gen 1's save shape), so a Gen 2 save reporting in
-  -- as "GOLD" would be true but useless everywhere else in this mod;
-  -- servers now accept GOLD too (forward-compat) in case that's revisited
-  -- later, but the client doesn't claim it yet. Falls back to UNKNOWN
-  -- (not an error) if game.save isn't ready yet or version is missing
-  -- entirely - shouldn't happen per the guaranteed-migration confirmation,
-  -- but this function runs at game.ready, right as save loading finishes,
-  -- so a defensive fallback costs nothing.
+  -- declaration) - "red"/"blue"/"yellow"/"gold"/"silver", always non-nil
+  -- once a save exists (GameVersion.VERSIONS - Gold and Silver are Gen 2,
+  -- currently Beta in the launcher). Uppercased to match this project's
+  -- existing RED/BLUE/YELLOW/GOLD/SILVER/UNKNOWN convention (schema.sql,
+  -- every server endpoint's validation list). GOLD/SILVER are now sent
+  -- as-is, not collapsed to UNKNOWN - see isGen2(), countBadges(), and
+  -- readStatsSnapshot() below for the real save-shape differences a Gen 2
+  -- save needs handled (money/badges/pokedex.caught/hallOfFame all live
+  -- somewhere different there - confirmed directly against the engine's
+  -- real src/core/gen2/Save.lua, not guessed). Falls back to UNKNOWN (not
+  -- an error) if game.save isn't ready yet or version is missing entirely -
+  -- shouldn't happen per the guaranteed-migration confirmation, but this
+  -- function runs at game.ready, right as save loading finishes, so a
+  -- defensive fallback costs nothing.
   local function resolveGameVersion()
     local v = game and game.save and game.save.version
     if type(v) ~= "string" then return "UNKNOWN" end
     v = v:upper()
-    if v == "RED" or v == "BLUE" or v == "YELLOW" then return v end
+    if v == "RED" or v == "BLUE" or v == "YELLOW" or v == "GOLD" or v == "SILVER" then return v end
     return "UNKNOWN"
+  end
+
+  -- Gen 2 (Gold/Silver) save shape differs from Gen 1 in exactly the ways
+  -- documented below - confirmed directly against the engine's real
+  -- src/core/gen2/Save.lua, not guessed by analogy (this project has been
+  -- burned by that before - see readStatsSnapshot's money comment). This
+  -- is a legitimate per-cart-CONTENT check (the save's actual field
+  -- layout genuinely differs), not the "version allow-list as a feature
+  -- gate" anti-pattern docs/preparing-your-mod-for-gen2.md warns against -
+  -- every other read in this file (party, playTime, pokedex.seen,
+  -- presence/friends/markers, every event) is already generation-agnostic
+  -- and untouched.
+  local function isGen2(version)
+    return version == "GOLD" or version == "SILVER"
   end
 
   -- ---- HTTP plumbing ------------------------------------------------------
@@ -785,7 +800,7 @@ return function(mod)
     { id = "RAINBOWBADGE" }, { id = "SOULBADGE" },    { id = "MARSHBADGE" },
     { id = "VOLCANOBADGE" }, { id = "EARTHBADGE" },
   }
-  local function countBadges()
+  local function countGen1Badges()
     local ok, list = pcall(function() return mod.content.constants:get("badges") end)
     if not ok or type(list) ~= "table" or #list == 0 then list = VANILLA_BADGES end
     local inv = game and game.save and game.save.inventory
@@ -795,6 +810,34 @@ return function(mod)
       if inv[entry.item or entry.id] then n = n + 1 end
     end
     return n
+  end
+
+  -- Gen 2 badges are NOT badge items in save.inventory at all - confirmed
+  -- directly against src/core/gen2/Save.lua: "a Gen 2 slot carries no
+  -- badge items" (the same comment SaveData.slotSummary uses to justify
+  -- reading badges this exact way for its own launcher summary). Instead
+  -- they're two separate boolean sets on save.player: save.player.badges
+  -- (8 Johto badges) and save.player.kantoBadges (8 Kanto badges), summing
+  -- to up to 16 - matching Continue_DisplayBadgeCount's real two-byte walk
+  -- (engine/menus/intro_menu.asm:461-469). The Gen 1 constants.badges/
+  -- inventory approach above genuinely does not apply here, not just as a
+  -- fallback - this is a real second counting mechanism, not a guess.
+  local function countGen2Badges()
+    local p = game and game.save and game.save.player
+    if type(p) ~= "table" then return 0 end
+    local n = 0
+    if type(p.badges) == "table" then
+      for _, has in pairs(p.badges) do if has then n = n + 1 end end
+    end
+    if type(p.kantoBadges) == "table" then
+      for _, has in pairs(p.kantoBadges) do if has then n = n + 1 end end
+    end
+    return n
+  end
+
+  local function countBadges()
+    if isGen2(gameVersion) then return countGen2Badges() end
+    return countGen1Badges()
   end
 
   -- Reads everything the stats snapshot needs from game.save directly -
@@ -897,30 +940,64 @@ return function(mod)
   -- see research/gen1-save-format-findings.md for how each field was
   -- confirmed. playTime isn't read here (not shown on the detail screen),
   -- but pokedex/hallOfFame/money/badges all are.
+  --
+  -- Three of these fields live at a genuinely different path on a Gen 2
+  -- (Gold/Silver) save - confirmed directly against src/core/gen2/Save.lua,
+  -- not guessed:
+  --   money:         save.player.money on Gen 2 (Gen 1: top-level save.money)
+  --   pokedexCaught: save.pokedex.caught on Gen 2 (Gen 1: save.pokedex.owned -
+  --                  .seen is the same key on both, so that one's untouched)
+  --   leagueWins:    save.hallOfFame.count on Gen 2, a { count, teams } table
+  --                  (Gen 1: save.hallOfFame is a plain array, #save.hallOfFame
+  --                  entries - the same #-on-a-non-array bug class this
+  --                  project already fixed once for parseObjects' empty-array
+  --                  case, caught here before shipping instead of after)
+  -- party/playTime (encodePartySnapshot/readPlaySeconds) and pokedex.seen
+  -- are already generation-agnostic - same field names both sides - so they
+  -- need no branch here.
   local function readStatsSnapshot()
     local save = game and game.save
     if not save then return nil end
+    local gen2 = isGen2(gameVersion)
+
     local seen, caught = 0, 0
     if type(save.pokedex) == "table" then
       if type(save.pokedex.seen) == "table" then for _ in pairs(save.pokedex.seen) do seen = seen + 1 end end
-      if type(save.pokedex.owned) == "table" then for _ in pairs(save.pokedex.owned) do caught = caught + 1 end end
+      local caughtSet = gen2 and save.pokedex.caught or save.pokedex.owned
+      if type(caughtSet) == "table" then for _ in pairs(caughtSet) do caught = caught + 1 end end
     end
+
     local leagueWins = 0
-    if type(save.hallOfFame) == "table" then leagueWins = #save.hallOfFame end
+    if gen2 then
+      if type(save.hallOfFame) == "table" then leagueWins = tonumber(save.hallOfFame.count) or 0 end
+    else
+      if type(save.hallOfFame) == "table" then leagueWins = #save.hallOfFame end
+    end
+
+    local money
+    if gen2 then
+      money = tonumber(save.player and save.player.money) or 0
+    else
+      -- game.save.money, NOT save.player.money - confirmed by reading
+      -- SaveData.lua's own newGame() table construction directly: money
+      -- is a plain top-level key sibling to player/party/flags/pokedex on
+      -- a GEN 1 save, not nested under player (player only holds
+      -- map/x/y/facing/name/rival/id there). An earlier draft of this
+      -- guessed save.player.money by analogy with save.player.name and
+      -- would have silently read nil (falling back to 0) for every real
+      -- Gen 1 player - caught before shipping by checking the actual
+      -- source rather than assuming. Gen 2 really does nest it under
+      -- save.player.money (see the branch above) - both are real, for
+      -- different generations, not one guess and one fix.
+      money = tonumber(save.money) or 0
+    end
+
     return {
       badges = countBadges(),
       pokedexSeen = seen,
       pokedexCaught = caught,
       leagueWins = leagueWins,
-      -- game.save.money, NOT save.player.money - confirmed by reading
-      -- SaveData.lua's own newGame() table construction directly: money
-      -- is a plain top-level key sibling to player/party/flags/pokedex,
-      -- not nested under player (player only holds map/x/y/facing/name/
-      -- rival/id). An earlier draft of this guessed save.player.money by
-      -- analogy with save.player.name and would have silently read nil
-      -- (falling back to 0) for every real player - caught before
-      -- shipping by checking the actual source rather than assuming.
-      money = tonumber(save.money) or 0,
+      money = money,
       playSeconds = readPlaySeconds(),
       party = encodePartySnapshot(),
     }
@@ -983,7 +1060,8 @@ return function(mod)
   local onlineCount = nil   -- nil until the first successful fetch
   local nearby = {}         -- array of { account_id, name, trainer_id }, current map only
   -- array of { game_version, count, players = {...} }, always exactly
-  -- RED/BLUE/YELLOW in that order once fetched - see online_by_version.php.
+  -- RED/BLUE/YELLOW/GOLD/SILVER in that order once fetched - see
+  -- online_by_version.php.
   -- nil until the first successful fetch (SilphNetOnline's own screen,
   -- see below), same "nil means haven't heard back yet, distinct from an
   -- empty/zero real answer" convention as onlineCount.
@@ -1679,7 +1757,8 @@ return function(mod)
             -- Version tag now lives HERE, next to ONLINE, not on the page
             -- counter line - "ONLINE (YELLOW)" is 15 chars at the longest
             -- real version name, comfortably under the 16-char budget
-            -- (checked by hand: RED=12, BLUE=13, YELLOW=15, GOLD=13).
+            -- (checked by hand: RED=12, BLUE=13, YELLOW=15, GOLD=13,
+            -- SILVER=15 - same length as YELLOW, still under budget).
             -- Still only shown while this specific entry is ONLINE -
             -- offline, no version at all, regardless of how many
             -- versions this friend has (per earlier direct feedback:
@@ -1880,11 +1959,19 @@ return function(mod)
                 else
                   -- "BADGES" + right-padded count, same left-label/
                   -- right-value layout as every stats-style line
-                  -- elsewhere in this file (e.g. FRIENDS/REQUESTS).
-                  -- Badge count is 0-8, so no more than 1 digit ever
-                  -- appears here - "BADGES     6/8" comfortably fits
-                  -- the 16-char budget even with the "/8" suffix.
-                  Font.draw("BADGES     " .. tostring(tonumber(st.badges) or 0) .. "/8", 16, 32)
+                  -- elsewhere in this file (e.g. FRIENDS/REQUESTS). Max
+                  -- is 8 on a Gen 1 save but 16 on Gen 2 (8 Johto + 8
+                  -- Kanto, see countGen2Badges) - a real bug caught here
+                  -- (not by testing, by being asked directly whether Gen 2
+                  -- badges displayed sensibly): this used to hardcode "/8"
+                  -- unconditionally, which would have shown something
+                  -- like "BADGES     12/8" for a Gold/Silver friend.
+                  -- cur.version is this specific page's own game_version
+                  -- (e.g. "BLUE" or "GOLD"), already in scope - "BADGES
+                  -- 16/16" is 16 chars exactly, still comfortably within
+                  -- budget at the maximum either way.
+                  local badgeMax = isGen2(cur.version) and 16 or 8
+                  Font.draw("BADGES     " .. tostring(tonumber(st.badges) or 0) .. "/" .. badgeMax, 16, 32)
                   Font.draw("SEEN     " .. tostring(tonumber(st.pokedex_seen) or 0), 16, 48)
                   Font.draw("CAUGHT   " .. tostring(tonumber(st.pokedex_caught) or 0), 16, 64)
                   Font.draw("LEAGUE WINS " .. tostring(tonumber(st.league_wins) or 0), 16, 80)
@@ -2773,9 +2860,12 @@ return function(mod)
   -- Two independent paging axes, per direct request ("split this into
   -- categories... navigate left and right to more pages... then the
   -- option to add the players like the NEARBY screen"):
-  --   * self.verPage: 0 = summary (RED/BLUE/YELLOW counts together),
-  --     1/2/3 = that version's own page. LEFT/RIGHT cycles this axis,
-  --     wrapping 0->1->2->3->0.
+  --   * self.verPage: 0 = summary (every tracked version's count
+  --     together), 1..N = that version's own page, where N is however
+  --     many versions online_by_version.php actually returned (5 as of
+  --     Gen 2 support - RED/BLUE/YELLOW/GOLD/SILVER). LEFT/RIGHT cycles
+  --     this axis, wrapping 0->1->...->N->0 (see pageCount below, not a
+  --     hardcoded count).
   --   * self.playerIndex: which player (1-based) is showing WITHIN the
   --     current version's page - UP/DOWN cycles this axis, independent
   --     of LEFT/RIGHT, same "two axes on one screen" convention the
@@ -2816,11 +2906,20 @@ return function(mod)
         function self:update(dt)
           pcall(drainHttpResults)
           local input = g.input
+          -- Page count is 1 (summary) + however many versions the server
+          -- actually returned, NOT a hardcoded 4 - that was a real bug
+          -- this Gen 2 pass caught: it silently assumed exactly 3 tracked
+          -- versions (RED/BLUE/YELLOW), which broke the moment
+          -- online_by_version.php started returning 5 (GOLD/SILVER
+          -- added). Before the first successful fetch (onlineByVersion
+          -- still nil) this pins to 1 page, so LEFT/RIGHT are no-ops
+          -- rather than paging into data that doesn't exist yet.
+          local pageCount = 1 + (onlineByVersion and #onlineByVersion or 0)
           if input:wasPressed("right") then
-            self.verPage = (self.verPage + 1) % 4
+            self.verPage = (self.verPage + 1) % pageCount
             self.playerIndex = 1
           elseif input:wasPressed("left") then
-            self.verPage = (self.verPage - 1) % 4
+            self.verPage = (self.verPage - 1) % pageCount
             self.playerIndex = 1
           end
           if self.verPage > 0 and onlineByVersion then
@@ -2846,14 +2945,14 @@ return function(mod)
             Font.draw("- ONLINE -", 16, 8)
             Font.draw("CHECKING...", 16, 72)
           elseif self.verPage == 0 then
-            -- Summary page: all three versions' counts together, per
+            -- Summary page: every tracked version's count together, per
             -- direct request ("total amount of people online... RED: 4
             -- ONLINE / BLUE: 3 ONLINE / YELLOW: 1 ONLINE"). Labels
             -- right-padded to align the counts in a column, same
             -- left-label/right-value convention used elsewhere in this
             -- file (BADGES/SEEN/CAUGHT etc. on the STATS page) - YELLOW
-            -- (6 chars) is the longest label, so RED/BLUE pad out to
-            -- match it.
+            -- and SILVER (6 chars each) are the longest labels, so
+            -- RED/BLUE/GOLD pad out to match them.
             Font.draw("- ONLINE -", 16, 8)
             for i, v in ipairs(onlineByVersion) do
               local label = v.game_version

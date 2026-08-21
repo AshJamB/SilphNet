@@ -13,21 +13,22 @@
 // GET: (no params)
 // Returns: {"ok":true,"total":8,"versions":[
 //   {"game_version":"RED","count":4}, {"game_version":"BLUE","count":3},
-//   {"game_version":"YELLOW","count":1}
+//   {"game_version":"YELLOW","count":1}, {"game_version":"GOLD","count":0},
+//   {"game_version":"SILVER","count":0}
 // ]}
 //
-// Same RED/BLUE/YELLOW-only, UNKNOWN-excluded, 300s-online-window rules
-// as online_by_version.php (see that file's own comments for why) - kept
-// as a separate constant/query here rather than importing that file's
-// logic, since this endpoint's whole point is to be simpler and to never
-// touch the `accounts` table at all (no JOIN needed when names/IDs are
-// never returned), reducing what this public-facing endpoint can ever
+// Same RED/BLUE/YELLOW/GOLD/SILVER, UNKNOWN-excluded, 300s-online-window
+// rules as online_by_version.php (see that file's own comments for why) -
+// kept as a separate constant/query here rather than importing that
+// file's logic, since this endpoint's whole point is to be simpler and to
+// never touch the `accounts` table at all (no JOIN needed when names/IDs
+// are never returned), reducing what this public-facing endpoint can ever
 // expose even if it had a bug.
 
 require __DIR__ . '/db.php';
 
 const SILPHNET_PUBLIC_ONLINE_AFTER_SECONDS = 300;
-const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW'];
+const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER'];
 
 try {
     $pdo = silphnet_db();

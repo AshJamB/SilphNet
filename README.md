@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.10.0 - HTTP requests are async again, via the engine's new `mod.fetch` API (a real, documented replacement for the `love.thread` capability an earlier engine update permanently blocked - see below). Falls back to the old synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
+**Status: v1.11.0 - Gen 2 (Pokemon Gold/Silver, currently Beta in the Gen1Recomp launcher) is now supported alongside Red/Blue/Yellow. HTTP requests are also async again, via the engine's new `mod.fetch` API (a real, documented replacement for the `love.thread` capability an earlier engine update permanently blocked). Falls back to the old synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
@@ -87,7 +87,7 @@ server/
       remove_friend.php        remove an accepted friend (or decline/cancel a pending request)
       pending_requests.php     list incoming friend requests awaiting your accept
       online_count.php         count of everyone currently online, globally (not just friends)
-      online_by_version.php    everyone online, grouped by game version (RED/BLUE/YELLOW), with player lists
+      online_by_version.php    everyone online, grouped by game version (RED/BLUE/YELLOW/GOLD/SILVER), with player lists
       nearby.php               everyone else (friend or not) currently on a given map
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
@@ -188,7 +188,7 @@ person per screen (**UP/DOWN** pages between them), with the same
 **SN NEARBY** already uses. UNKNOWN-version presence rows (an account
 whose client hasn't reported a real game.save.version yet) never appear
 here - see "There's deliberately no..." further down for why this
-mod can tell RED/BLUE/YELLOW apart at all.
+mod can tell RED/BLUE/YELLOW/GOLD/SILVER apart at all.
 
 A fifth Start Menu row, **SN ABOUT** (credits and links), always sits
 last, directly above **QUIT** - a deliberate, permanent position as the
