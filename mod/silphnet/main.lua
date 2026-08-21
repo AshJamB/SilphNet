@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.12.5)
+-- SilphNet - async presence + friends (v1.12.7)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -2676,16 +2676,6 @@ return function(mod)
       new = function(g)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true, page = 1 }
-        function self:update(dt)
-          local input = g.input
-          if input:wasPressed("right") or input:wasPressed("a") then
-            self.page = (#nearby == 0) and 1 or (self.page % #nearby) + 1
-          end
-          if input:wasPressed("left") then
-            self.page = (#nearby == 0) and 1 or ((self.page - 2) % #nearby) + 1
-          end
-          if input:wasPressed("b") then g.stack:pop() end
-        end
         -- A nearby entry is only "account_id" - friends are keyed on
         -- "account_id|game_version" (one friend can have several active
         -- saves), so this checks by account_id alone across every
@@ -2694,12 +2684,41 @@ return function(mod)
         -- shown "NOT YET A FRIEND" here, which is wrong - caught before
         -- shipping by walking through what this screen would say for
         -- someone you'd already added.
+        -- Moved above self:update (was below, after draw's own copy was
+        -- written) so update can use it too now that START triggers a
+        -- real add-friend action here - a nested function can only see a
+        -- local declared before it lexically, not one declared later in
+        -- the same enclosing scope, regardless of call order.
         local function isAlreadyFriend(accountId)
           if not accountId then return false end
           for _, f in pairs(friends) do
             if f.account_id == accountId then return true end
           end
           return false
+        end
+        function self:update(dt)
+          local input = g.input
+          if input:wasPressed("right") or input:wasPressed("a") then
+            self.page = (#nearby == 0) and 1 or (self.page % #nearby) + 1
+          end
+          if input:wasPressed("left") then
+            self.page = (#nearby == 0) and 1 or ((self.page - 2) % #nearby) + 1
+          end
+          -- START jumps straight to Add Friend with this entry's Trainer
+          -- ID already filled in - added directly in response to a
+          -- report that the old hint text implied a one-button add that
+          -- didn't actually exist (see SilphNetAddFriend's prefillId
+          -- handling). Only wired up when there's a real, addable entry
+          -- on screen - a no-op otherwise, same as every other button
+          -- here already guards against an empty list.
+          if input:wasPressed("start") then
+            local n = nearby[self.page]
+            if n and n.trainer_id and not isAlreadyFriend(n.account_id) then
+              addFriendStatus = ""
+              mod.ui.push(g, "SilphNetAddFriend", { prefillId = n.trainer_id })
+            end
+          end
+          if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
@@ -2730,15 +2749,19 @@ return function(mod)
               Font.draw("ALREADY A FRIEND", 16, 72)
             else
               Font.draw("NOT YET A FRIEND", 16, 72)
-              -- Was "ADD VIA DPAD RIGHT" (18 chars) / "ON STATUS SCREEN"
-              -- (16 chars) - the first line silently overflowed this
-              -- project's real 16-char/line budget, undetected until a
-              -- byte-for-byte length check while building the SN ONLINE
-              -- screen (which was about to inherit the exact same text)
-              -- caught it. "RIGHT:ADD FRIEND" fits exactly at 16 and
-              -- reads as a real instruction, not just truncated further.
-              Font.draw("RIGHT:ADD FRIEND", 16, 80)
-              Font.draw("ON STATUS SCREEN", 16, 88)
+              -- Was "RIGHT:ADD FRIEND" / "ON STATUS SCREEN" - genuinely
+              -- misleading, reported directly: RIGHT is ALREADY bound on
+              -- this very screen (paging to the next nearby entry), so
+              -- the hint read as "press RIGHT to add this friend" when
+              -- RIGHT does something else entirely here. Briefly
+              -- reworded to describe going to the Status screen instead,
+              -- then upgraded again to a REAL working shortcut once
+              -- START (genuinely unbound on this screen) turned out to
+              -- be free: it now pushes SilphNetAddFriend with this
+              -- entry's Trainer ID already filled in, so the hint can
+              -- finally name a button that actually does the thing it
+              -- says.
+              Font.draw("START:ADD FRIEND", 16, 80)
             end
           end
           if #nearby > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, 112) end
@@ -2837,9 +2860,32 @@ return function(mod)
   -- the same pattern every other screen in this file already uses.
   pcall(function()
     mod.content.screens:register("SilphNetAddFriend", {
-      new = function(g)
+      -- args.prefillId (added for the SN NEARBY/SN ONLINE "START:ADD
+      -- FRIEND" shortcuts): a Trainer ID string to load straight into
+      -- the digit spinner on open, so the player doesn't have to retype
+      -- an ID they were just looking at on another screen. Same
+      -- args-reaching-new() mechanism SilphNetMarkerTalk already relies
+      -- on (args.slot there) - not re-verifying it here since that
+      -- screen's own use of it already ships and works.
+      new = function(g, args)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true, digits = { 0, 0, 0, 0, 0 }, cursor = 1 }
+        local prefillId = args and args.prefillId
+        if prefillId then
+          -- Defensive against anything other than a clean 5-digit
+          -- string: strip non-digits, left-pad short values (a real
+          -- Trainer ID can start with leading zeros, e.g. "00423"), and
+          -- keep only the rightmost 5 characters of anything longer
+          -- rather than erroring or leaving digits blank.
+          local s = tostring(prefillId):gsub("%D", "")
+          if #s > 0 then
+            if #s < 5 then s = string.rep("0", 5 - #s) .. s end
+            s = s:sub(-5)
+            for i = 1, 5 do
+              self.digits[i] = tonumber(s:sub(i, i)) or 0
+            end
+          end
+        end
         function self:update(dt)
           -- Same reasoning as SilphNetStatus above: drains HTTP_RESULT
           -- directly so a request that finishes while sitting on this
@@ -3567,6 +3613,22 @@ return function(mod)
               end
             end
           end
+          -- START jumps straight to Add Friend with the player currently
+          -- shown on this page's Trainer ID already filled in - same
+          -- shortcut SilphNetNearby gained for the same reason (the old
+          -- hint text implied a one-button add that didn't actually
+          -- exist). Only wired up on a real, addable per-version player
+          -- page - a no-op on the summary page, on an empty version, or
+          -- on your own "(YOU)" row.
+          if self.verPage > 0 and onlineByVersion then
+            local v = onlineByVersion[self.verPage]
+            local p = v and v.players and v.players[self.playerIndex]
+            if input:wasPressed("start") and p and p.trainer_id and p.is_you ~= "true"
+                and not isAlreadyFriend(p.account_id) then
+              addFriendStatus = ""
+              mod.ui.push(g, "SilphNetAddFriend", { prefillId = p.trainer_id })
+            end
+          end
           if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
@@ -3644,8 +3706,17 @@ return function(mod)
                 Font.draw("ALREADY A FRIEND", 16, 72)
               else
                 Font.draw("NOT YET A FRIEND", 16, 72)
-                Font.draw("RIGHT:ADD FRIEND", 16, 80)
-                Font.draw("ON STATUS SCREEN", 16, 88)
+                -- Was "RIGHT:ADD FRIEND" / "ON STATUS SCREEN" - the exact
+                -- bug reported directly against this screen: RIGHT is
+                -- ALREADY bound here (paging to the next tracked game
+                -- version), so the hint read as an instruction to press
+                -- RIGHT to add this friend when RIGHT does something
+                -- else entirely. Same upgrade as SN NEARBY: START was
+                -- genuinely free on this screen too, so it now pushes
+                -- SilphNetAddFriend with this player's Trainer ID
+                -- already filled in (see self:update above) instead of
+                -- just describing where to go.
+                Font.draw("START:ADD FRIEND", 16, 80)
               end
             end
           end
