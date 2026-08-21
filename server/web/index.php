@@ -228,6 +228,57 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
     background: transparent; color: var(--text); cursor: pointer; font-size: 0.9rem;
   }
   .modal-close:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* Community stats ticker - a single line that fades between a handful of
+     server-wide totals on a slow interval, fetched once on load. A JS
+     interval swap was picked over a CSS @keyframes marquee because this
+     page has no existing continuous-animation convention to match (its
+     only motion today is instant hover-state swaps on .btn/.online-pill/
+     .version-row) - a slow crossfade of one line at a time reads as an
+     extension of that same "quiet, static-feeling page" tone, where a
+     scrolling marquee would stand out as a new and busier kind of motion. */
+  .stats-ticker {
+    display: none; text-align: center; color: var(--text-dim); font-size: 0.9rem;
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 999px;
+    padding: 8px 18px; margin: 0 auto 18px; max-width: 560px; opacity: 1;
+    transition: opacity 0.4s ease;
+  }
+  .stats-ticker.fade { opacity: 0; }
+  .stats-ticker strong { color: var(--text); }
+
+  /* Leaderboards section */
+  .lb-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .lb-tab {
+    background: transparent; border: 1px solid var(--panel-border); color: var(--text-dim);
+    border-radius: 999px; padding: 8px 16px; font-size: 0.85rem; cursor: pointer; font-weight: 600;
+  }
+  .lb-tab:hover { border-color: var(--blue); color: var(--blue); }
+  .lb-tab.active { background: var(--orange); border-color: var(--orange); color: #1a1200; }
+  .lb-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .lb-table th {
+    text-align: left; color: var(--text-dim); font-weight: 600; font-size: 0.78rem;
+    text-transform: uppercase; letter-spacing: 0.04em; padding: 8px 10px; border-bottom: 1px solid var(--panel-border);
+  }
+  .lb-table td { padding: 10px; border-bottom: 1px solid var(--panel-border); vertical-align: middle; }
+  .lb-table tr:last-child td { border-bottom: none; }
+  .lb-rank { color: var(--text-dim); font-weight: 700; width: 2em; }
+  .lb-name-cell { display: flex; flex-direction: column; gap: 4px; }
+  .lb-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lb-name { color: var(--text); font-weight: 600; }
+  .lb-id { color: var(--text-dim); font-size: 0.78rem; }
+  .lb-total { color: var(--blue); font-weight: 700; text-align: right; }
+  /* Small colored pill next to a name, same visual language as the
+     .v-swatch dots above - a title is just another small at-a-glance tag,
+     so it reuses this page's existing palette (--orange for the rarest
+     tiers, --blue for the rest) rather than introducing new colors. */
+  .trainer-title {
+    display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+    background: rgba(79, 195, 247, 0.15); color: var(--blue); border: 1px solid rgba(79, 195, 247, 0.35);
+  }
+  .trainer-title.tier-legend, .trainer-title.tier-champion {
+    background: rgba(246, 169, 53, 0.15); color: var(--orange); border-color: rgba(246, 169, 53, 0.35);
+  }
 </style>
 </head>
 <body>
@@ -240,6 +291,9 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
       friends by Trainer ID, and see their last-known positions - no
       server process required, works the same on desktop and mobile.
     </p>
+    <div class="stats-ticker" id="statsTicker">
+      <span id="statsTickerText"></span>
+    </div>
     <div style="display: flex; justify-content: center; margin-top: 22px;">
       <button type="button" class="online-pill is-loading" id="onlinePill" aria-haspopup="dialog">
         <span class="dot"></span>
@@ -279,6 +333,24 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
         <strong>Works everywhere</strong>
         <p>Plain HTTP, ordinary PHP + MySQL hosting behind it - runs the same on desktop and mobile, negligible data use.</p>
       </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Leaderboards</h2>
+    <div class="card">
+      <div class="lb-tabs" id="lbTabs">
+        <button type="button" class="lb-tab active" data-tab="league">League Clears</button>
+        <button type="button" class="lb-tab" data-tab="badges">Badges</button>
+        <button type="button" class="lb-tab" data-tab="pokedex">Pokedex Caught</button>
+      </div>
+      <p class="modal-empty" id="lbStatus">Loading leaderboard&hellip;</p>
+      <table class="lb-table" id="lbTable" style="display: none;">
+        <thead>
+          <tr><th>#</th><th>Trainer</th><th style="text-align: right;">Total</th></tr>
+        </thead>
+        <tbody id="lbTableBody"></tbody>
+      </table>
     </div>
   </section>
 
@@ -503,6 +575,142 @@ onlineModal.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') onlineModal.classList.remove('open');
 });
+
+// Leaderboards section - one fetch of public_leaderboards.php on page load,
+// cached client-side as three pre-ranked lists; tab clicks only toggle
+// which cached list is rendered, they never refetch - same "fetch once,
+// render many times from memory" shape as this page's own lastOnlineData
+// cache above, just with three lists instead of one.
+const LEADERBOARDS_API = '/api/public_leaderboards.php';
+let lbData = null;
+let lbActiveTab = 'league';
+
+// Maps a title string to a CSS modifier class, so the rarer/harder titles
+// (SilphNet Legend, Champion) get the --orange treatment already used
+// elsewhere on this page for "the notable/primary thing", while the more
+// common titles stay --blue - same two-color hierarchy the page already
+// uses for primary vs secondary buttons.
+function titleTierClass(title) {
+  if (title === 'SilphNet Legend' || title === 'Champion') return 'tier-legend';
+  return '';
+}
+
+function renderLeaderboardTab() {
+  const status = document.getElementById('lbStatus');
+  const table = document.getElementById('lbTable');
+  const body = document.getElementById('lbTableBody');
+  if (!lbData) return;
+
+  const list = lbData[lbActiveTab] || [];
+  if (list.length === 0) {
+    table.style.display = 'none';
+    status.style.display = '';
+    status.textContent = 'No entries yet for this leaderboard.';
+    return;
+  }
+
+  status.style.display = 'none';
+  table.style.display = '';
+  body.innerHTML = '';
+  list.forEach((p, i) => {
+    const tr = document.createElement('tr');
+    const tierClass = titleTierClass(p.title);
+    tr.innerHTML = `
+      <td class="lb-rank">${i + 1}</td>
+      <td>
+        <div class="lb-name-cell">
+          <div class="lb-name-row">
+            <span class="lb-name"></span>
+            <span class="trainer-title ${tierClass}"></span>
+          </div>
+          <span class="lb-id"></span>
+        </div>
+      </td>
+      <td class="lb-total"></td>
+    `;
+    tr.querySelector('.lb-name').textContent = p.name;
+    tr.querySelector('.trainer-title').textContent = p.title;
+    tr.querySelector('.lb-id').textContent = `ID ${p.trainer_id}`;
+    tr.querySelector('.lb-total').textContent = p.total;
+    body.appendChild(tr);
+  });
+}
+
+async function fetchLeaderboards() {
+  const status = document.getElementById('lbStatus');
+  try {
+    const res = await fetch(LEADERBOARDS_API);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'unknown error');
+    lbData = data;
+    renderLeaderboardTab();
+  } catch (e) {
+    // Degrade gracefully, same as the GitHub release card and online
+    // widget above - never a raw error, never a broken/empty-looking table.
+    status.style.display = '';
+    status.textContent = 'Leaderboards are unavailable right now.';
+  }
+}
+
+document.getElementById('lbTabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.lb-tab');
+  if (!btn) return;
+  lbActiveTab = btn.dataset.tab;
+  for (const t of document.querySelectorAll('.lb-tab')) t.classList.toggle('active', t === btn);
+  renderLeaderboardTab();
+});
+
+fetchLeaderboards();
+
+// Community stats ticker - fetched once on load, then cycles through a
+// handful of pre-built phrases with a simple opacity crossfade (see the
+// .stats-ticker CSS comment for why this was chosen over a @keyframes
+// marquee). Stays hidden entirely on fetch failure rather than showing an
+// empty/broken bar - this page uses no emoji anywhere else (see the
+// tagline, feature cards, footer above), so these phrases match that
+// plain-text tone rather than introducing emoji here.
+const COMMUNITY_STATS_API = '/api/public_community_stats.php';
+const TICKER_INTERVAL_MS = 5000;
+
+function buildTickerPhrases(data) {
+  return [
+    `<strong>${data.online_now}</strong> trainer${data.online_now === 1 ? '' : 's'} online right now`,
+    `<strong>${data.total_trainers}</strong> registered trainers`,
+    `<strong>${data.total_pokedex_caught}</strong> Pokemon caught by the SilphNet community`,
+    `<strong>${data.total_league_clears}</strong> league clears and counting`,
+    `<strong>${data.total_badges}</strong> badges earned across all trainers`,
+  ];
+}
+
+async function fetchCommunityStats() {
+  const ticker = document.getElementById('statsTicker');
+  const tickerText = document.getElementById('statsTickerText');
+  try {
+    const res = await fetch(COMMUNITY_STATS_API);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'unknown error');
+
+    const phrases = buildTickerPhrases(data);
+    let i = 0;
+    tickerText.innerHTML = phrases[0];
+    ticker.style.display = '';
+
+    setInterval(() => {
+      ticker.classList.add('fade');
+      setTimeout(() => {
+        i = (i + 1) % phrases.length;
+        tickerText.innerHTML = phrases[i];
+        ticker.classList.remove('fade');
+      }, 400); // matches the 0.4s opacity transition in CSS
+    }, TICKER_INTERVAL_MS);
+  } catch (e) {
+    // Fails soft - the ticker just never appears, no broken/empty bar,
+    // same degrade-gracefully rule as the GitHub release card.
+    ticker.style.display = 'none';
+  }
+}
+
+fetchCommunityStats();
 </script>
 </body>
 </html>
