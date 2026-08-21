@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.12.7)
+-- SilphNet - async presence + friends (v1.12.8)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a

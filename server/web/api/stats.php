@@ -82,6 +82,26 @@ try {
         if ($badgesMask < 0) $badgesMask = 0;
         if ($badgesMask > 65535) $badgesMask = 65535;
 
+        // league_wins is deliberately a ONE-WAY ratchet here (GREATEST of
+        // the incoming value and whatever's already stored), unlike every
+        // other column in this table which just takes the client's latest
+        // report as-is. This is the server-side half of the .sav
+        // import/export Hall-of-Fame-wipe fix (see main.lua's
+        // EVENT_BEAT_CHAMPION_RIVAL floor-to-1 logic and mod.card's
+        // "known" section for the full root cause): that lossy codec has
+        // no way to preserve game.save.hallOfFame at all, so a save that's
+        // ever re-imported can genuinely report a SMALLER league_wins
+        // than what this account already, legitimately earned before.
+        // Every other field here (badges, pokedex, money, play_seconds)
+        // doesn't have this problem - the .sav codec DOES preserve those
+        // - so only league_wins gets this special monotonic treatment;
+        // applying it everywhere would risk silently masking a real future
+        // bug in one of those other fields by making a wrong DECREASE
+        // permanently invisible. Once an account has ever been credited
+        // with N clears, this makes it structurally impossible for any
+        // future re-import (or any other client-side bug that briefly
+        // under-reports) to drag that number back down - it can only ever
+        // go up from here, from any client.
         $stmt = $pdo->prepare(
             'INSERT INTO friend_stats
                (account_id, game_version, badges, badges_mask, pokedex_seen, pokedex_caught, league_wins, money, play_seconds, party, updated_at)
@@ -89,7 +109,7 @@ try {
                (:account_id, :version, :badges, :badges_mask, :seen, :caught, :wins, :money, :play_seconds, :party, NOW())
              ON DUPLICATE KEY UPDATE
                badges = VALUES(badges), badges_mask = VALUES(badges_mask), pokedex_seen = VALUES(pokedex_seen),
-               pokedex_caught = VALUES(pokedex_caught), league_wins = VALUES(league_wins),
+               pokedex_caught = VALUES(pokedex_caught), league_wins = GREATEST(VALUES(league_wins), league_wins),
                money = VALUES(money), play_seconds = VALUES(play_seconds), party = VALUES(party), updated_at = NOW()'
         );
         $stmt->execute([
