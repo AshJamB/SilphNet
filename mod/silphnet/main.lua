@@ -3873,6 +3873,19 @@ return function(mod)
           -- is showing - per the owner's request to surface this
           -- somewhere on this screen.
           Font.draw(("YOUR CLEARS " .. tostring(myLeagueClears())):sub(1, 16), 16, 32)
+          -- TEMPORARY diagnostic line for the "shows 0 despite a real
+          -- Hall of Fame clear" investigation - shows the RAW LOCAL save
+          -- read (#save.hallOfFame on Gen 1, save.hallOfFame.count on
+          -- Gen 2) side by side with the line above's SERVER-sourced
+          -- combined total, so it's visible on this one screen, with no
+          -- console/log setup needed, whether the bug is "the local save
+          -- genuinely reads 0" (a real engine/read-side bug) or "local
+          -- reads correctly, but that value never made it to the
+          -- server" (an upload-side bug) - two very different fixes.
+          -- Remove once that's confirmed either way.
+          local localWins = "?"
+          pcall(function() localWins = tostring(readStatsSnapshot().leagueWins or 0) end)
+          Font.draw(("LOCAL SAVE " .. localWins):sub(1, 16), 16, 40)
           if leagueLeaderboard == nil then
             -- Same "nil means haven't heard back yet" convention as
             -- onlineByVersion/onlineCount elsewhere in this file.
