@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.11.2)
+-- SilphNet - async presence + friends (v1.12.1)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -1465,22 +1465,71 @@ return function(mod)
   end
 
   -- ---- gym sign + league leaderboard sign (runtime placement) -------------
-  -- Every offset tried when hunting for a safe tile to plant a static
-  -- sign, plus-shape cardinals first (the more natural "just beside you"
-  -- placement), corners as a fallback if all four cardinals are blocked
-  -- or occupied. Deliberately searched relative to the PLAYER's OWN
-  -- current tile (mod.world:current()), never a fixed/hardcoded
-  -- coordinate - this project ships no ROM data (README/CLAUDE.md), so
-  -- no real gym's layout can ever be baked into this file. This also
-  -- guarantees safety by construction: whatever tile the player is
-  -- standing on right now is necessarily walkable ground they themselves
-  -- just reached, so a neighbour of it that ALSO reads as walkable via
-  -- mod.world:mapOverview()'s live collision snapshot is safe too,
-  -- without this file ever needing to know a single real map's actual
-  -- floor plan ahead of time.
-  local SIGN_SEARCH_OFFSETS = {
-    { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 },      -- plus shape (cardinal), tried first
-    { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 },    -- corners, tried second
+  -- First cut of this just searched the 8 tiles immediately touching the
+  -- player's own entry tile - which is, by definition, the doorway itself
+  -- (that's the one tile guaranteed walkable without knowing the map).
+  -- Reported back as "the sign is right in the way as soon as you walk
+  -- in" - correct bug report: standing right next to the door is exactly
+  -- where a real player needs to walk through a second later, and is
+  -- nowhere near where a gym's own statues/plaques actually sit (further
+  -- into the room, off to the side of the main aisle).
+  --
+  -- Fix: use the player's OWN facing at the moment they enter (every real
+  -- door warp faces you further INTO the room you just entered - e.g.
+  -- walking north through a gym's front door leaves you facing "up") to
+  -- project a line a few tiles deeper into the room before searching at
+  -- all, then search that anchor point's SIDEWAYS neighbours first (left/
+  -- right of the direction you're walking), not its forward/backward
+  -- ones - so the sign lands beside the aisle you'd naturally walk up,
+  -- never sitting squarely on top of it. Still zero hardcoded coordinates
+  -- (this project ships no ROM data - README/CLAUDE.md): every candidate
+  -- tile is still verified walkable live via mod.world:mapOverview()
+  -- before ever being used, exactly as before - only WHICH tiles get
+  -- tried first has changed.
+  --
+  -- FORWARD_BY_FACING gives the (dx, dy) step for one tile in the
+  -- direction the player is currently facing (engine facing strings are
+  -- lowercase - confirmed via src/world/NPC.lua/OverworldController.lua).
+  -- Falls back to "up" (the single most common real door-facing in this
+  -- game) if a facing somehow comes back nil/unrecognised, rather than
+  -- refusing to search at all.
+  local FORWARD_BY_FACING = {
+    up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 0 },
+  }
+
+  -- Built fresh per search (see findSafeSignTile) from whichever facing
+  -- the player actually entered with, so "sideways" always means
+  -- perpendicular to THAT specific entry, not a fixed screen direction.
+  local function buildSignSearchOffsets(facing)
+    local fwd = FORWARD_BY_FACING[facing] or FORWARD_BY_FACING.up
+    -- Perpendicular unit vector (rotate fwd 90 degrees) - "left of the
+    -- aisle" and "right of the aisle" from the player's own point of view.
+    local side = { -fwd[2], fwd[1] }
+    local offsets = {}
+    -- Anchor a few tiles past the doorway (distance 2-5), never distance
+    -- 0-1, so nothing can ever land in the door tile or its immediate
+    -- threshold. At each depth, try sideways-of-the-aisle first (1-2
+    -- tiles either side), straight ahead only as a last resort at that
+    -- depth, before moving deeper and repeating - this consistently
+    -- prefers "beside the path a few steps in" over "blocking the path"
+    -- or "still basically in the doorway."
+    for depth = 2, 6 do
+      local ax, ay = fwd[1] * depth, fwd[2] * depth
+      for _, s in ipairs({ 2, -2, 1, -1 }) do
+        offsets[#offsets + 1] = { ax + side[1] * s, ay + side[2] * s }
+      end
+      offsets[#offsets + 1] = { ax, ay } -- dead ahead, only if nothing beside it worked
+    end
+    return offsets
+  end
+
+  -- Last-resort offsets if nothing in the forward/sideways search (out to
+  -- depth 6) turned up a walkable, unoccupied tile - e.g. a very small
+  -- one-room gym. Falls back to the original "immediately beside the
+  -- player" ring rather than spawning nothing at all.
+  local SIGN_SEARCH_FALLBACK_OFFSETS = {
+    { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 },
+    { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 },
   }
 
   -- overview.rows[y+1]:sub(x+1,x+1) per MapOverview's own build() contract
@@ -1506,18 +1555,30 @@ return function(mod)
     if not cur or cur.mapId ~= mapId or not cur.x or not cur.y then return nil end
     local ok, overview = pcall(mod.world.mapOverview, mod.world)
     if not ok or not overview or type(overview.rows) ~= "table" then return nil end
-    for _, off in ipairs(SIGN_SEARCH_OFFSETS) do
-      local x, y = cur.x + off[1], cur.y + off[2]
-      if x >= 0 and y >= 0 and y < #overview.rows then
-        local row = overview.rows[y + 1]
-        local c = row and row:sub(x + 1, x + 1)
-        if c and isWalkableSignChar(c) then
-          local key = x .. "," .. y
-          if not (occupied and occupied[key]) then return x, y end
+
+    local function tryOffsets(offsets)
+      for _, off in ipairs(offsets) do
+        local x, y = cur.x + off[1], cur.y + off[2]
+        if x >= 0 and y >= 0 and y < #overview.rows then
+          local row = overview.rows[y + 1]
+          local c = row and row:sub(x + 1, x + 1)
+          if c and isWalkableSignChar(c) then
+            local key = x .. "," .. y
+            if not (occupied and occupied[key]) then return x, y end
+          end
         end
       end
+      return nil
     end
-    return nil
+
+    -- Preferred: a few tiles deeper into the room, beside the natural
+    -- walking line, never in the doorway itself (see buildSignSearchOffsets
+    -- above for why). Only falls back to the old "right beside the
+    -- player" ring if that entire deeper search comes up empty (e.g. a
+    -- cramped one-room map where depth 2-6 runs off the map edge).
+    local x, y = tryOffsets(buildSignSearchOffsets(cur.facing))
+    if x then return x, y end
+    return tryOffsets(SIGN_SEARCH_FALLBACK_OFFSETS)
   end
 
   -- Current gym-sign state, read by SilphNetGymSign at push time (same
@@ -3562,7 +3623,17 @@ return function(mod)
           if g.input:wasPressed("b") or g.input:wasPressed("a") then g.stack:pop() end
         end
         function self:draw()
-          Font.drawBox(0, 0, 20, 8)
+          -- Full 20x18-tile box, matching every other screen in this file
+          -- (SilphNetResetConfirm/SilphNetCreateAccount etc.) - an earlier
+          -- version of this screen used a much shorter custom box (20x8)
+          -- sized just to its own content, which left the footer button
+          -- hints sitting right on top of the box's own bottom border
+          -- instead of below it, since drawBox's border occupies row
+          -- (th-1) - reported as the footer looking "chopped off." Every
+          -- other screen avoids this by always drawing the full-height
+          -- box and leaving a large gap before its footer text (y=120+),
+          -- so this now matches that same safe convention exactly.
+          Font.drawBox(0, 0, 20, 18)
           -- Every real badge id is well under the 16-char/line budget
           -- (CASCADEBADGE/RAINBOWBADGE/VOLCANOBADGE/MINERALBADGE/
           -- GLACIERBADGE are the longest at 12 chars) - :sub(1,16) is
@@ -3571,15 +3642,15 @@ return function(mod)
           Font.draw((badgeId or "GYM BADGE"):sub(1, 16), 16, 8)
           local n = #names
           if n == 0 then
-            Font.draw("NO FRIENDS HAVE", 16, 32)
-            Font.draw("THIS BADGE YET", 16, 40)
+            Font.draw("NO FRIENDS HAVE", 16, 40)
+            Font.draw("THIS BADGE YET", 16, 48)
           else
             if self.index > n then self.index = 1 end
-            Font.draw(self.index .. "/" .. n, 16, 24)
-            Font.draw(names[self.index]:sub(1, 16), 16, 40)
-            if n > 1 then Font.draw("UD:PAGE", 16, 56) end
+            Font.draw(self.index .. "/" .. n, 16, 32)
+            Font.draw(names[self.index]:sub(1, 16), 16, 48)
+            if n > 1 then Font.draw("UD:PAGE", 16, 64) end
           end
-          Font.draw("A/B:CLOSE", 16, 64)
+          Font.draw("A/B:CLOSE", 16, 128)
         end
         return self
       end,
@@ -3617,6 +3688,15 @@ return function(mod)
         -- later in the same session shows updated totals rather than a
         -- permanently stale first snapshot.
         if not leagueLeaderboardBusy then fireLeagueLeaderboardFetch() end
+        -- Own league-clear count, shown on this screen per the owner's
+        -- request ("show somewhere your own amount of league wins") -
+        -- read once at screen-open time straight from the local save via
+        -- readStatsSnapshot (the exact same field already uploaded as
+        -- league_wins on every stats snapshot), not from the server -
+        -- this needs no network round trip and is correct even before the
+        -- leaderboard fetch above has come back.
+        local myLeagueWins = 0
+        pcall(function() myLeagueWins = readStatsSnapshot().leagueWins or 0 end)
         local self = { game = g, isOpaque = true, page = 1, index = 1, sortAsc = false }
         local function currentList()
           if not leagueLeaderboard then return nil end
@@ -3650,19 +3730,33 @@ return function(mod)
           if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
-          Font.drawBox(0, 0, 20, 11)
-          local title = (self.page == 1) and "ALL PLAYERS" or "FRIENDS"
-          Font.draw(("- " .. title .. " -"):sub(1, 16), 16, 8)
+          -- Full 20x18-tile box (see SilphNetGymSign's own comment on this
+          -- same change) - the previous 20x11 box put the footer button
+          -- hints right on top of the box's own bottom border instead of
+          -- below it, which is what "the nav bits are chopped off" was.
+          Font.drawBox(0, 0, 20, 18)
+          -- A persistent top-line title makes clear what this whole
+          -- screen is about even before reading any row - the ALL
+          -- PLAYERS/FRIENDS toggle alone didn't say "league clears"
+          -- anywhere, which was the "doesn't clearly say its league wins"
+          -- report. "SN LEAGUE CLEARS" is 16 chars exactly.
+          Font.draw("SN LEAGUE CLEARS", 16, 8)
+          local subtitle = (self.page == 1) and "ALL PLAYERS" or "FRIENDS"
+          Font.draw(("- " .. subtitle .. " -"):sub(1, 16), 16, 16)
+          -- Own clear count, always visible regardless of which list/sort
+          -- is showing - per the owner's request to surface this
+          -- somewhere on this screen.
+          Font.draw(("YOUR CLEARS " .. tostring(myLeagueWins)):sub(1, 16), 16, 32)
           if leagueLeaderboard == nil then
             -- Same "nil means haven't heard back yet" convention as
             -- onlineByVersion/onlineCount elsewhere in this file.
-            Font.draw("CHECKING...", 16, 40)
+            Font.draw("CHECKING...", 16, 56)
           else
             local list = currentList()
             local n = list and #list or 0
             if self.index > n then self.index = 1 end
             if n == 0 then
-              Font.draw("NO CLEARS YET", 16, 40)
+              Font.draw("NO CLEARS YET", 16, 56)
             else
               local row = list[self.index]
               -- The TRUE rank (1 = top scorer overall) is always
@@ -3671,15 +3765,15 @@ return function(mod)
               -- "#1" always means the actual top scorer, never "first
               -- one shown on this particular page flip."
               local rank = self.sortAsc and (n - self.index + 1) or self.index
-              Font.draw(("#" .. rank .. "  " .. self.index .. "/" .. n):sub(1, 16), 16, 24)
-              Font.draw((row.name or "?"):sub(1, 16), 16, 40)
-              Font.draw("ID   " .. (row.trainer_id or "-----"), 16, 48)
-              Font.draw(("CLEARS " .. tostring(row.total or 0)):sub(1, 16), 16, 56)
-              if n > 1 then Font.draw("UD:PAGE", 16, 64) end
+              Font.draw(("#" .. rank .. "  " .. self.index .. "/" .. n):sub(1, 16), 16, 56)
+              Font.draw((row.name or "?"):sub(1, 16), 16, 72)
+              Font.draw("ID   " .. (row.trainer_id or "-----"), 16, 80)
+              Font.draw(("CLEARS " .. tostring(row.total or 0)):sub(1, 16), 16, 88)
+              if n > 1 then Font.draw("UD:PAGE", 16, 104) end
             end
           end
-          Font.draw("LR:LIST SEL:SORT", 16, 72)
-          Font.draw("B:BACK", 16, 80)
+          Font.draw("LR:LIST SEL:SORT", 16, 120)
+          Font.draw("B:BACK", 16, 128)
         end
         return self
       end,
