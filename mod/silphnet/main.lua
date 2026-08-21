@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.11.0)
+-- SilphNet - async presence + friends (v1.11.2)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -936,6 +936,48 @@ return function(mod)
     return out
   end
 
+  -- Gen 2 introduces gendered species variants whose ids spell the gender
+  -- out in full - "OINKOLOGNE_FEMALE", "OINKOLOGNE_MALE" - rather than
+  -- Gen 1's existing short "_M"/"_F" convention (NIDORAN_M/NIDORAN_F,
+  -- which already fit every screen's budget and are left exactly as-is
+  -- here, per direct request - the pattern below only matches a literal
+  -- "_MALE"/"_FEMALE" suffix, not a bare "_M"/"_F" one, so Gen 1 species
+  -- are genuinely untouched, not just coincidentally unaffected). A full
+  -- "_FEMALE"/"_MALE" suffix can push a species name past the 16-char/
+  -- line budget nearly every screen in this file respects, on its own,
+  -- before a level or anything else is even added - confirmed by a real
+  -- report: "OINKOLOGNE_FEMALE" (17 chars) silently lost its trailing "E"
+  -- to queueCatchActivity's :sub(1,16) truncation, landing in
+  -- friend_activity as "OINKOLOGNE_FEMAL".
+  --
+  -- Rendered as the real "\xE2\x99\x82"/"\xE2\x99\x80" (Unicode MALE/
+  -- FEMALE SIGN, UTF-8) glyphs rather than a "(M)"/"(F)" suffix - not a
+  -- guess: confirmed directly against the engine's own src/render/
+  -- Font.lua, whose glyph-segmentation comment names "♂" as ITS OWN
+  -- worked example of a multi-byte UTF-8 character the font draws as one
+  -- glyph ("a multi-byte char ('é', '♂')... is one glyph"), the same
+  -- symbol the real cartridges use for NIDORAN's own two forms. One
+  -- glyph beats three characters for the budget too - "OINKOLOGNE♀" is
+  -- 12 chars against "OINKOLOGNE (F)"'s 14.
+  local GENDER_MALE = "\xE2\x99\x82"     -- ♂ U+2642
+  local GENDER_FEMALE = "\xE2\x99\x80"   -- ♀ U+2640
+  local function formatSpeciesName(species)
+    local s = tostring(species or "?"):upper()
+    -- Two separate matches, not one pattern with "(MALE|FEMALE)" - Lua
+    -- patterns have no "|" alternation operator at all (unlike regex), so
+    -- that reads as the literal 11-character sequence "MALE|FEMALE" and
+    -- silently never matches anything real. Caught by a standalone test
+    -- harness before this ever shipped, not by inspection - every case
+    -- this was meant to fix came back FAIL on the first attempt.
+    -- FEMALE checked before MALE only because "_FEMALE" is the longer,
+    -- more specific suffix; neither can ever match the other's string.
+    local base = s:match("^(.+)_FEMALE$")
+    if base then return base .. GENDER_FEMALE end
+    base = s:match("^(.+)_MALE$")
+    if base then return base .. GENDER_MALE end
+    return s
+  end
+
   -- Reads everything the stats snapshot needs from game.save directly -
   -- see research/gen1-save-format-findings.md for how each field was
   -- confirmed. playTime isn't read here (not shown on the detail screen),
@@ -1040,7 +1082,7 @@ return function(mod)
   local pendingActivityQueue = {}   -- array of "CAUGHT LVL 25\nBLASTOISE" strings, oldest first
   local function queueCatchActivity(mon, species)
     local level = mon and tonumber(mon.level)
-    local name = tostring(species or "?"):upper()
+    local name = formatSpeciesName(species)
     local line1 = level and ("CAUGHT LVL " .. level) or "CAUGHT"
     -- Each line gets its own 16-char cap (this screen's real budget),
     -- not one combined 32-char cap - a long species name can't borrow
@@ -2025,7 +2067,16 @@ return function(mod)
                   -- species name (TENTACRUEL, 10 chars) + " LV" + up to
                   -- 3 digits comfortably fits 16 chars (10+3+3=16 at the
                   -- absolute worst case, checked by hand, not assumed).
-                  Font.draw((mon.species .. " LV" .. mon.level):sub(1, 16), 16, 32)
+                  -- formatSpeciesName shortens a Gen 2 "_MALE"/"_FEMALE"
+                  -- suffix to a real ♂/♀ glyph first - mon.species here is the
+                  -- raw id decodePartySnapshot returned unchanged, same as
+                  -- what's actually stored server-side (see
+                  -- encodePartySnapshot's own comment on why the wire
+                  -- format stays raw) - so this is still :sub(1,16)
+                  -- afterward purely as the same defensive cap every
+                  -- other line here already has, not expected to
+                  -- routinely cut anything short now.
+                  Font.draw((formatSpeciesName(mon.species) .. " LV" .. mon.level):sub(1, 16), 16, 32)
                   Font.draw("HP " .. mon.hp .. "/" .. mon.maxHp, 16, 48)
                   -- Up to 4 moves, one per line, packed at consecutive
                   -- 8px rows (y=64,72,80,88) instead of the previous
