@@ -35,12 +35,21 @@
 // Returns: {"ok":true,
 //   "league":[{"name","trainer_id","total","title"}, ...],   (top 50, ranked by league_wins)
 //   "badges":[{"name","trainer_id","total","title"}, ...],   (top 50, ranked by badges)
-//   "pokedex":[{"name","trainer_id","total","title"}, ...]}  (top 50, ranked by pokedex_caught)
+//   "pokedex":[{"name","trainer_id","total","title"}, ...],  (top 50, ranked by pokedex_caught)
+//   "seen":[{"name","trainer_id","total","title"}, ...]}     (top 50, ranked by pokedex_seen)
 //
 // Each list independently excludes accounts with a 0 total in the stat
 // THAT list is ranked by (same HAVING-style exclusion league_leaderboard.php
 // uses) - an account with 40 badges but 0 league clears still belongs on
 // the badges list, just not the league one.
+//
+// Ties (e.g. two accounts both sitting at a version's real max - all 8
+// Kanto badges - where the raw total genuinely can't separate them any
+// further) break alphabetically by name, ascending - a stable, obvious
+// tiebreak a visitor can understand at a glance ("why is X above Y - oh,
+// alphabetical") rather than an arbitrary one that depends on row-insert
+// order or account_id, which would look unstable/unfair for no visible
+// reason.
 
 require __DIR__ . '/db.php';
 
@@ -72,7 +81,8 @@ try {
         'SELECT a.name, a.trainer_id,
                 SUM(fs.league_wins) AS league_total,
                 SUM(fs.badges) AS badges_total,
-                SUM(fs.pokedex_caught) AS pokedex_total
+                SUM(fs.pokedex_caught) AS pokedex_total,
+                SUM(fs.pokedex_seen) AS seen_total
          FROM friend_stats fs
          JOIN accounts a ON a.account_id = fs.account_id
          GROUP BY a.account_id, a.name, a.trainer_id'
@@ -85,26 +95,31 @@ try {
         $leagueTotal = (int)$r['league_total'];
         $badgesTotal = (int)$r['badges_total'];
         $pokedexTotal = (int)$r['pokedex_total'];
+        $seenTotal = (int)$r['seen_total'];
         $players[] = [
             'name' => $r['name'],
             'trainer_id' => str_pad($r['trainer_id'], 5, '0', STR_PAD_LEFT),
             'league_total' => $leagueTotal,
             'badges_total' => $badgesTotal,
             'pokedex_total' => $pokedexTotal,
+            'seen_total' => $seenTotal,
             'title' => silphnet_public_title($leagueTotal, $badgesTotal, $pokedexTotal),
         ];
     }
 
     // Builds one ranked/filtered/limited public-facing list (name,
     // trainer_id, total, title) for a given stat key, sorted by that
-    // stat's total DESC, excluding zero totals - same "0 isn't worth
-    // ranking" rule league_leaderboard.php's "all" list already applies.
+    // stat's total DESC then name ASC (see the tiebreak comment above),
+    // excluding zero totals - same "0 isn't worth ranking" rule
+    // league_leaderboard.php's "all" list already applies.
     $buildList = function ($totalKey) use ($players) {
         $filtered = array_values(array_filter($players, function ($p) use ($totalKey) {
             return $p[$totalKey] > 0;
         }));
         usort($filtered, function ($a, $b) use ($totalKey) {
-            return $b[$totalKey] <=> $a[$totalKey];
+            $byTotal = $b[$totalKey] <=> $a[$totalKey];
+            if ($byTotal !== 0) return $byTotal;
+            return strcasecmp($a['name'], $b['name']);
         });
         $filtered = array_slice($filtered, 0, SILPHNET_PUBLIC_LEADERBOARD_LIMIT);
         return array_map(function ($p) use ($totalKey) {
@@ -122,6 +137,7 @@ try {
         'league' => $buildList('league_total'),
         'badges' => $buildList('badges_total'),
         'pokedex' => $buildList('pokedex_total'),
+        'seen' => $buildList('seen_total'),
     ]);
 } catch (PDOException $e) {
     silphnet_error('db error', 500);

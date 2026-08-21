@@ -206,9 +206,28 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   .modal-box {
     background: var(--panel); border: 1px solid var(--panel-border); border-radius: 14px;
     padding: 24px 26px; max-width: 380px; width: 100%;
+    /* The stat modal can now hold a 5-row version breakdown plus a
+       10-row "Top Contributors" table underneath it - taller than any
+       modal content before this addition, so this needs to be able to
+       scroll on a short viewport instead of overflowing off-screen. */
+    max-height: 85vh; overflow-y: auto;
   }
   .modal-box h3 { margin: 0 0 4px; font-size: 1.15rem; color: var(--orange); }
   .modal-box .modal-sub { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 20px; }
+  /* Smaller, secondary heading for a second block of content inside a
+     modal that already has its own h3 title (e.g. "Top Contributors"
+     under the stat modal's per-version breakdown) - same orange accent
+     as modal-box h3 but visually subordinate to it. A plain top margin
+     alone read as "squished" against the version rows above it once
+     both were actually on the page together (reported directly) - a
+     real border-top divider plus more breathing room above it makes the
+     two blocks read as clearly separate sections instead of one run-on
+     list, the same way the leaderboard "card" elsewhere on this page is
+     visually separated from the section above it. */
+  .stat-modal-subheading {
+    margin: 28px 0 12px; padding-top: 20px; font-size: 0.95rem; color: var(--orange);
+    border-top: 1px solid var(--panel-border);
+  }
   .version-row {
     display: flex; align-items: center; justify-content: space-between;
     padding: 12px 14px; border-radius: 10px; background: #1c2230; margin-bottom: 10px;
@@ -220,8 +239,6 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
      further drilldown, unlike the online modal's clickable version rows
      above) - same look, just without the pointer cursor/hover affordance
      that would wrongly suggest these are clickable too. */
-  .version-row.static { cursor: default; }
-  .version-row.static:hover { border-color: transparent; }
   .version-row .v-name { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text); }
   .version-row .v-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .version-row .v-count-wrap { display: flex; align-items: center; gap: 8px; }
@@ -401,6 +418,7 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
         <button type="button" class="lb-tab active" data-tab="league">League Clears</button>
         <button type="button" class="lb-tab" data-tab="badges">Badges</button>
         <button type="button" class="lb-tab" data-tab="pokedex">Pokedex Caught</button>
+        <button type="button" class="lb-tab" data-tab="seen">Pokedex Seen</button>
       </div>
       <p class="modal-empty" id="lbStatus">Loading leaderboard&hellip;</p>
       <table class="lb-table" id="lbTable" style="display: none;">
@@ -486,22 +504,29 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   </div>
 </div>
 
-<!-- Community stat-by-version modal - shares the same .modal-overlay/
-     .modal-box/.version-row/.v-swatch CSS the online-pill modal above
-     uses, but is its own separate modal instance (own ids, own JS
-     handlers) rather than a generalized/shared modal component. These are
-     static aggregate totals with no further per-player drilldown (no
-     "back" button, no second level), so reusing the online modal's
-     two-view state machine would mean bolting an unused back/forward path
-     onto it just to fit a shape it doesn't need - a second small modal
-     following the same visual pattern is simpler and keeps the existing
-     online-drilldown code (which DOES need that two-view state machine)
-     completely untouched. -->
+<!-- Community stat modal - shares the same .modal-overlay/.modal-box/
+     .version-row/.v-swatch CSS the online-pill modal above uses, but is
+     its own separate modal instance (own ids, own JS handlers) rather
+     than a generalized/shared modal component - keeps the existing
+     online-drilldown code completely untouched.
+     Two views, same "back button swaps visibility" pattern the online
+     modal already established: the top view (version breakdown + a
+     combined-total Top Contributors list) is view 1; clicking a version
+     row drills into view 2, that ONE version's own per-player ranking
+     (public_stat_by_version.php - see its own comment on why this is a
+     genuinely different ranking than the combined Top Contributors list
+     above it, not just the same data re-filtered client-side). -->
 <div class="modal-overlay" id="statModal" role="dialog" aria-modal="true" aria-labelledby="statModalTitle">
   <div class="modal-box">
+    <button type="button" class="modal-back" id="statModalBack">&larr; Back to all versions</button>
     <h3 id="statModalTitle">Stat by version</h3>
     <p class="modal-sub" id="statModalSub">Loading&hellip;</p>
     <div id="statVersionRows"></div>
+    <div id="statTopContributorsWrap">
+      <h3 class="stat-modal-subheading">Top Contributors</h3>
+      <div id="statTopContributors"></div>
+    </div>
+    <div id="statPlayerRows" style="display: none;"></div>
     <button type="button" class="modal-close" id="statModalClose">Close</button>
   </div>
 </div>
@@ -714,20 +739,30 @@ function renderLeaderboardTab() {
   });
 }
 
-async function fetchLeaderboards() {
+// A single in-flight promise, not just the eventual lbData cache - the
+// stat-modal "top contributors" list (see showStatModal below) can be
+// opened before this page-load fetch has actually resolved yet, and
+// needs to AWAIT the same request rather than firing a second one or
+// reading lbData while it's still null.
+let lbFetchPromise = null;
+
+function fetchLeaderboards() {
   const status = document.getElementById('lbStatus');
-  try {
-    const res = await fetch(LEADERBOARDS_API);
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'unknown error');
-    lbData = data;
-    renderLeaderboardTab();
-  } catch (e) {
-    // Degrade gracefully, same as the GitHub release card and online
-    // widget above - never a raw error, never a broken/empty-looking table.
-    status.style.display = '';
-    status.textContent = 'Leaderboards are unavailable right now.';
-  }
+  lbFetchPromise = (async () => {
+    try {
+      const res = await fetch(LEADERBOARDS_API);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'unknown error');
+      lbData = data;
+      renderLeaderboardTab();
+    } catch (e) {
+      // Degrade gracefully, same as the GitHub release card and online
+      // widget above - never a raw error, never a broken/empty-looking table.
+      status.style.display = '';
+      status.textContent = 'Leaderboards are unavailable right now.';
+    }
+  })();
+  return lbFetchPromise;
 }
 
 document.getElementById('lbTabs').addEventListener('click', (e) => {
@@ -808,12 +843,19 @@ async function fetchCommunityStats() {
 // public_community_stats.php's "versions" array) to its pill's DOM id and
 // modal copy. Kept as one small table rather than four near-duplicate
 // blocks of pill/modal-wiring code below.
+// lbKey ties each stat back to the matching list in public_leaderboards.php
+// (lbData.seen/pokedex/badges/league - see fetchLeaderboards above) so the
+// "top contributors" mini-list inside each stat's modal can reuse that
+// SAME already-fetched, already-tiebroken (see that endpoint's own
+// alphabetical-tiebreak comment) ranking rather than a second endpoint or
+// a second sort implemented here in JS.
 const STAT_META = {
-  pokedex_seen: { pillId: 'statPillSeen', label: 'Pokemon Seen', modalTitle: 'Pokemon Seen by Version' },
-  pokedex_caught: { pillId: 'statPillCaught', label: 'Pokemon Caught', modalTitle: 'Pokemon Caught by Version' },
-  badges: { pillId: 'statPillBadges', label: 'Gym Badges Earned', modalTitle: 'Gym Badges Earned by Version' },
-  league_wins: { pillId: 'statPillLeague', label: 'League Victories', modalTitle: 'League Victories by Version' },
+  pokedex_seen: { pillId: 'statPillSeen', label: 'Pokemon Seen', modalTitle: 'Pokemon Seen by Version', lbKey: 'seen' },
+  pokedex_caught: { pillId: 'statPillCaught', label: 'Pokemon Caught', modalTitle: 'Pokemon Caught by Version', lbKey: 'pokedex' },
+  badges: { pillId: 'statPillBadges', label: 'Gym Badges Earned', modalTitle: 'Gym Badges Earned by Version', lbKey: 'badges' },
+  league_wins: { pillId: 'statPillLeague', label: 'League Victories', modalTitle: 'League Victories by Version', lbKey: 'league' },
 };
+const STAT_MODAL_TOP_N = 10;
 let communityStatsData = null; // cached community-stats response, reused by every stat pill's modal
 
 function renderStatPills(data) {
@@ -825,38 +867,150 @@ function renderStatPills(data) {
   }
 }
 
-function showStatModal(statKey) {
+// Shared by both the "Top Contributors" combined list and the per-version
+// player drilldown below - both are the exact same {name, trainer_id,
+// total} shape, just sourced from different endpoints/scopes, so one
+// renderer keeps their markup/behaviour identical instead of two
+// near-duplicate table-building blocks.
+function renderRankedTable(container, list, emptyText) {
+  container.innerHTML = '';
+  if (list.length === 0) {
+    container.innerHTML = `<p class="modal-empty">${emptyText}</p>`;
+    return;
+  }
+  const table = document.createElement('table');
+  table.className = 'lb-table';
+  table.innerHTML = '<thead><tr><th>#</th><th>Trainer</th><th style="text-align: right;">Total</th></tr></thead><tbody></tbody>';
+  const body = table.querySelector('tbody');
+  list.forEach((p, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="lb-rank">${i + 1}</td>
+      <td><span class="lb-name"></span> <span class="lb-id"></span></td>
+      <td class="lb-total"></td>
+    `;
+    tr.querySelector('.lb-name').textContent = p.name;
+    tr.querySelector('.lb-id').textContent = `ID ${p.trainer_id}`;
+    tr.querySelector('.lb-total').textContent = p.total;
+    body.appendChild(tr);
+  });
+  container.appendChild(table);
+}
+
+// Renders the per-version breakdown, highest count first (owner's own
+// request - "order them by most to least") rather than the fixed
+// RED/BLUE/YELLOW/GOLD/SILVER tracked-version order the API returns them
+// in. Sorted here in JS on a COPY of the array (slice) - communityStatsData
+// is shared/cached across every stat's modal, so mutating its own
+// versions array in place would leave the NEXT stat modal opened
+// re-sorted by the wrong stat's numbers.
+//
+// Each row is now clickable (owner's own request - "clicking into the
+// versions tells you specifically the stats for that person within that
+// version, similar to clicking into a version when clicking whose
+// online") - drills into showStatVersionPlayers below, the exact same
+// summary-row-click-opens-detail shape the online-pill modal already
+// uses for its own version rows.
+function renderStatVersionRows(statKey) {
+  const rows = document.getElementById('statVersionRows');
+  rows.innerHTML = '';
+  const sorted = [...communityStatsData.versions].sort((a, b) => (b[statKey] || 0) - (a[statKey] || 0));
+  for (const v of sorted) {
+    const meta = VERSION_META[v.game_version] || { label: v.game_version, swatch: '' };
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'version-row';
+    row.innerHTML = `
+      <span class="v-name"><span class="v-swatch ${meta.swatch}"></span>${meta.label}</span>
+      <span class="v-count-wrap"><span class="v-count">${(v[statKey] || 0).toLocaleString()}</span><span class="v-chevron">&rsaquo;</span></span>
+    `;
+    row.addEventListener('click', () => showStatVersionPlayers(statKey, v.game_version, meta.label));
+    rows.appendChild(row);
+  }
+}
+
+// Top-contributors mini-list inside the modal - the owner's own request
+// ("have a leaderboard in here of people who have contributed the most").
+// Reuses the SAME public_leaderboards.php list the Leaderboards section's
+// own tabs already show (via STAT_META's lbKey - see its own comment) -
+// same names, same totals, same alphabetical tiebreak for genuine ties
+// (e.g. two accounts both sitting at 8/8 Kanto badges) - rather than a
+// second ranking implemented differently here. This is the COMBINED
+// (across every version) ranking - see showStatVersionPlayers for the
+// separate per-version-only ranking one click deeper.
+function renderStatTopContributors(statKey) {
   const cfg = STAT_META[statKey];
+  const list = ((lbData && lbData[cfg.lbKey]) || []).slice(0, STAT_MODAL_TOP_N);
+  renderRankedTable(document.getElementById('statTopContributors'), list, 'No contributors yet.');
+}
+
+// Second-level drilldown - one specific version's own per-player ranking
+// for this stat (public_stat_by_version.php), fetched fresh on click same
+// as the online modal's showPlayerList does for who's-online-in-this-
+// version. Deliberately a live fetch, not a client-side re-filter of
+// already-fetched data - unlike the aggregate totals this page already
+// caches, this is a genuinely different ranking (per-version, not
+// combined-across-versions) that this page has no other copy of yet.
+async function showStatVersionPlayers(statKey, gameVersion, versionLabel) {
+  document.getElementById('statModalBack').classList.add('show');
+  document.getElementById('statVersionRows').style.display = 'none';
+  document.getElementById('statTopContributorsWrap').style.display = 'none';
+  const playerRows = document.getElementById('statPlayerRows');
+  playerRows.style.display = '';
+  playerRows.innerHTML = '<p class="modal-empty">Loading&hellip;</p>';
+  document.getElementById('statModalTitle').textContent = `${STAT_META[statKey].label} - ${versionLabel}`;
+  document.getElementById('statModalSub').textContent = '';
+
+  try {
+    const res = await fetch(`${STAT_BY_VERSION_API}?stat=${encodeURIComponent(statKey)}&game_version=${encodeURIComponent(gameVersion)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'unknown error');
+    renderRankedTable(playerRows, data.players, `Nobody has any yet on ${versionLabel}.`);
+  } catch (e) {
+    playerRows.innerHTML = '<p class="modal-empty">Could not load this version’s breakdown. Try again.</p>';
+  }
+}
+
+function showStatModalSummary(statKey) {
+  const cfg = STAT_META[statKey];
+  document.getElementById('statModalBack').classList.remove('show');
+  document.getElementById('statPlayerRows').style.display = 'none';
+  document.getElementById('statVersionRows').style.display = '';
+  document.getElementById('statTopContributorsWrap').style.display = '';
   document.getElementById('statModalTitle').textContent = cfg.modalTitle;
+  document.getElementById('statModalSub').textContent = communityStatsData
+    ? 'Totals by game version, highest first.' : 'Stats unavailable right now.';
+}
+
+let statModalCurrentKey = null;   // so the back button knows which stat to return to
+
+async function showStatModal(statKey) {
+  statModalCurrentKey = statKey;
+  showStatModalSummary(statKey);
 
   const rows = document.getElementById('statVersionRows');
   rows.innerHTML = '';
-
-  if (!communityStatsData) {
-    document.getElementById('statModalSub').textContent = 'Stats unavailable right now.';
-    statModal.classList.add('open');
-    return;
-  }
-
-  document.getElementById('statModalSub').textContent = 'Totals by game version.';
-  for (const v of communityStatsData.versions) {
-    const meta = VERSION_META[v.game_version] || { label: v.game_version, swatch: '' };
-    const row = document.createElement('div');
-    row.className = 'version-row static';
-    row.innerHTML = `
-      <span class="v-name"><span class="v-swatch ${meta.swatch}"></span>${meta.label}</span>
-      <span class="v-count-wrap"><span class="v-count">${(v[statKey] || 0).toLocaleString()}</span></span>
-    `;
-    rows.appendChild(row);
-  }
+  document.getElementById('statTopContributors').innerHTML = '<p class="modal-empty">Loading&hellip;</p>';
   statModal.classList.add('open');
+
+  if (communityStatsData) renderStatVersionRows(statKey);
+
+  // lbData may not have resolved yet if this modal is opened very soon
+  // after page load - await the SAME in-flight request fetchLeaderboards
+  // already started, rather than firing a second one.
+  if (!lbData && lbFetchPromise) await lbFetchPromise;
+  renderStatTopContributors(statKey);
 }
 
+const STAT_BY_VERSION_API = '/api/public_stat_by_version.php';
 const statModal = document.getElementById('statModal');
 document.getElementById('statRow').addEventListener('click', (e) => {
   const btn = e.target.closest('.stat-pill');
   if (!btn) return;
   showStatModal(btn.dataset.stat);
+});
+document.getElementById('statModalBack').addEventListener('click', () => {
+  showStatModalSummary(statModalCurrentKey);
 });
 document.getElementById('statModalClose').addEventListener('click', () => {
   statModal.classList.remove('open');

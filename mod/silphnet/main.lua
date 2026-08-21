@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.12.2)
+-- SilphNet - async presence + friends (v1.12.3)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -1420,6 +1420,17 @@ return function(mod)
     if activity then fields.activity = activity end
     statsUploadBusy = true
     statsUploadActivitySent = activity   -- remembered so drainHttpResults knows what to pop on success
+    -- Logged specifically for diagnosing "my league wins/clears still
+    -- show 0" reports - lets a real snapshot upload be confirmed (or
+    -- ruled out) directly from the mod's own log, rather than guessing
+    -- whether the 3-minute upload cycle has actually fired yet since a
+    -- real Hall of Fame clear. Only logged when a real stats snapshot is
+    -- attached (statsFields truthy) - an activity-only upload (a catch,
+    -- fired independently of the stats cycle) has no leagueWins to report.
+    if statsFields then
+      mod.log:info("SilphNet: uploading stats snapshot (version=%s, leagueWins=%s, badges=%s)",
+        tostring(gameVersion), tostring(statsFields.leagueWins), tostring(statsFields.badges))
+    end
     httpAsyncGet("stats_upload", "/stats.php", fields)
   end
 
