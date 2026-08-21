@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.12.3)
+-- SilphNet - async presence + friends (v1.12.5)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -1208,6 +1208,37 @@ return function(mod)
       if type(save.hallOfFame) == "table" then leagueWins = tonumber(save.hallOfFame.count) or 0 end
     else
       if type(save.hallOfFame) == "table" then leagueWins = #save.hallOfFame end
+      -- Real, confirmed root cause of a "YOUR CLEARS shows 0 despite
+      -- genuinely beating the league" report: save.hallOfFame is NOT one
+      -- of the fields Gen1's .sav import/export codec models at all
+      -- (confirmed directly against the engine's own
+      -- src/save_convert/GenSave.lua - 1146 lines, zero mentions of Hall
+      -- of Fame in either direction). Any save that has EVER been
+      -- exported to a .sav and/or re-imported loses this roster array
+      -- completely, silently, even though the champion genuinely was
+      -- beaten - this is a real gap in the base engine's .sav codec, not
+      -- something introduced by this mod, and not something this mod can
+      -- fix at the source (that codec lives in the engine, not here).
+      --
+      -- EVENT_BEAT_CHAMPION_RIVAL, by contrast, IS one of the fields that
+      -- codec's eventFlags crosswalk explicitly preserves (confirmed in
+      -- src/save_convert/data/event_flags.lua) - a real, permanent flag
+      -- the game's own story scripts set once and never clear (see
+      -- data/scripts/story.lua's own comment: "EVENT_BEAT_CHAMPION_RIVAL
+      -- stays set" - deliberately distinct from the run-scoped
+      -- _THIS_RUN variant used for re-entry dialogue). So when the
+      -- roster array reads empty but this flag says the champion has
+      -- genuinely been beaten at least once, floor the count at 1 rather
+      -- than reporting a flatly false "never beaten the league."
+      --
+      -- This can only ever recover "at least 1", never the true original
+      -- count if the real number was higher before an import wiped it -
+      -- a boolean flag has no way to carry a count. Every REAL clear from
+      -- here on (with no further imports) still increments the roster
+      -- array normally on top of this floor, exactly as before.
+      if leagueWins == 0 and type(save.flags) == "table" and save.flags.EVENT_BEAT_CHAMPION_RIVAL then
+        leagueWins = 1
+      end
     end
 
     local money
@@ -3873,19 +3904,6 @@ return function(mod)
           -- is showing - per the owner's request to surface this
           -- somewhere on this screen.
           Font.draw(("YOUR CLEARS " .. tostring(myLeagueClears())):sub(1, 16), 16, 32)
-          -- TEMPORARY diagnostic line for the "shows 0 despite a real
-          -- Hall of Fame clear" investigation - shows the RAW LOCAL save
-          -- read (#save.hallOfFame on Gen 1, save.hallOfFame.count on
-          -- Gen 2) side by side with the line above's SERVER-sourced
-          -- combined total, so it's visible on this one screen, with no
-          -- console/log setup needed, whether the bug is "the local save
-          -- genuinely reads 0" (a real engine/read-side bug) or "local
-          -- reads correctly, but that value never made it to the
-          -- server" (an upload-side bug) - two very different fixes.
-          -- Remove once that's confirmed either way.
-          local localWins = "?"
-          pcall(function() localWins = tostring(readStatsSnapshot().leagueWins or 0) end)
-          Font.draw(("LOCAL SAVE " .. localWins):sub(1, 16), 16, 40)
           if leagueLeaderboard == nil then
             -- Same "nil means haven't heard back yet" convention as
             -- onlineByVersion/onlineCount elsewhere in this file.
