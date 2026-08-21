@@ -3,8 +3,18 @@
 // message. Same shape as ping.php: requires a valid token, keyed on
 // (account_id, game_version), never trusts a caller-supplied account_id.
 //
-// POST: token, [game_version], [badges, pokedex_seen, pokedex_caught,
-//        league_wins, money, play_seconds, party], [activity]
+// POST: token, [game_version], [badges, badges_mask, pokedex_seen,
+//        pokedex_caught, league_wins, money, play_seconds, party],
+//        [activity]
+//
+// badges_mask is a bit-per-badge snapshot (bit N per BADGE_BIT_INDEX in
+// main.lua's encodeBadgeMask), separate from the plain "badges" COUNT
+// above it - the gym sign feature needs to know WHICH specific badges a
+// friend has (e.g. "do they have CASCADEBADGE"), which a count alone
+// can't answer. Validated/clamped to fit a 16-bit mask (0-65535) the same
+// defensive way every other numeric stats field here is (int) cast
+// against a caller-controlled value, since a hostile or buggy client
+// could otherwise send an out-of-range int for a SMALLINT UNSIGNED column.
 //
 // party is main.lua's encodePartySnapshot() output - an opaque delimited
 // string (see schema.sql's comment on friend_stats.party for the exact
@@ -37,7 +47,8 @@ $account = silphnet_require_token();
 $version = strtoupper(trim($_POST['game_version'] ?? $_GET['game_version'] ?? 'UNKNOWN'));
 if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'UNKNOWN'], true)) $version = 'UNKNOWN';
 
-$hasStats = isset($_POST['badges']) || isset($_GET['badges']) || isset($_POST['pokedex_seen']) || isset($_GET['pokedex_seen'])
+$hasStats = isset($_POST['badges']) || isset($_GET['badges']) || isset($_POST['badges_mask']) || isset($_GET['badges_mask'])
+    || isset($_POST['pokedex_seen']) || isset($_GET['pokedex_seen'])
     || isset($_POST['pokedex_caught']) || isset($_GET['pokedex_caught']) || isset($_POST['league_wins']) || isset($_GET['league_wins']) || isset($_POST['money']) || isset($_GET['money'])
     || isset($_POST['play_seconds']) || isset($_GET['play_seconds']) || isset($_POST['party']) || isset($_GET['party']);
 $activity = rtrim($_POST['activity'] ?? $_GET['activity'] ?? '', " \t\0\x0B");
@@ -61,19 +72,30 @@ try {
         // this endpoint is concerned (see comment above $hasStats).
         $party = substr((string)($_POST['party'] ?? $_GET['party'] ?? ''), 0, 512);
 
+        // badges_mask clamped to [0, 65535] (fits the SMALLINT UNSIGNED
+        // column) rather than trusting a raw (int) cast the way the other
+        // fields here do - the other fields' columns are wide enough that
+        // an absurd input just gets silently truncated by MySQL, but a
+        // negative int cast from e.g. a malformed float would otherwise
+        // fail the INSERT outright against an UNSIGNED column.
+        $badgesMask = (int)($_POST['badges_mask'] ?? $_GET['badges_mask'] ?? 0);
+        if ($badgesMask < 0) $badgesMask = 0;
+        if ($badgesMask > 65535) $badgesMask = 65535;
+
         $stmt = $pdo->prepare(
             'INSERT INTO friend_stats
-               (account_id, game_version, badges, pokedex_seen, pokedex_caught, league_wins, money, play_seconds, party, updated_at)
+               (account_id, game_version, badges, badges_mask, pokedex_seen, pokedex_caught, league_wins, money, play_seconds, party, updated_at)
              VALUES
-               (:account_id, :version, :badges, :seen, :caught, :wins, :money, :play_seconds, :party, NOW())
+               (:account_id, :version, :badges, :badges_mask, :seen, :caught, :wins, :money, :play_seconds, :party, NOW())
              ON DUPLICATE KEY UPDATE
-               badges = VALUES(badges), pokedex_seen = VALUES(pokedex_seen),
+               badges = VALUES(badges), badges_mask = VALUES(badges_mask), pokedex_seen = VALUES(pokedex_seen),
                pokedex_caught = VALUES(pokedex_caught), league_wins = VALUES(league_wins),
                money = VALUES(money), play_seconds = VALUES(play_seconds), party = VALUES(party), updated_at = NOW()'
         );
         $stmt->execute([
             ':account_id' => $account['account_id'], ':version' => $version,
             ':badges' => (int)($_POST['badges'] ?? $_GET['badges'] ?? 0),
+            ':badges_mask' => $badgesMask,
             ':seen' => (int)($_POST['pokedex_seen'] ?? $_GET['pokedex_seen'] ?? 0),
             ':caught' => (int)($_POST['pokedex_caught'] ?? $_GET['pokedex_caught'] ?? 0),
             ':wins' => (int)($_POST['league_wins'] ?? $_GET['league_wins'] ?? 0),

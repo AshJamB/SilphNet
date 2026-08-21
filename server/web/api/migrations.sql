@@ -223,3 +223,35 @@ ALTER TABLE accounts ADD COLUMN email VARBINARY(512) NULL AFTER trainer_id;
 -- just re-run schema.sql, its CREATE TABLE IF NOT EXISTS will add it
 -- without touching anything else.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-21: friend_stats.badges_mask (gym sign + league leaderboard sign)
+-- Needed if your `friend_stats` table was created BEFORE badges_mask
+-- existed in schema.sql. If you're setting up SilphNet fresh, schema.sql
+-- already creates this column and you can skip this whole block.
+--
+-- badges_mask is a bit-per-badge snapshot (bit N per BADGE_BIT_INDEX in
+-- main.lua), distinct from the existing "badges" column which only ever
+-- stored a plain count - the new gym sign feature needs to answer "does
+-- this friend have THIS SPECIFIC gym's badge", which a count alone can't
+-- answer (two 4-badge trainers can have completely different four
+-- badges). Existing rows simply default to 0 (no bits set) until each
+-- client's next stats upload backfills its real mask - harmless in the
+-- interim, a gym sign just shows "no friends have this badge yet" for
+-- anyone who hasn't re-uploaded since updating.
+-- ---------------------------------------------------------------------------
+
+-- Step 1: check if the column is missing before running step 2 - if this
+-- returns a row, badges_mask already exists and you should skip step 2.
+--
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema = DATABASE() AND table_name = 'friend_stats' AND column_name = 'badges_mask';
+--
+-- (empty result = column is missing, continue with step 2 below)
+
+-- Step 2: add the column, defaulting every existing row to 0 (no badges
+-- known yet) - safe to run while players are actively uploading stats,
+-- since stats.php's own upsert doesn't require this column to already
+-- exist for its OTHER fields to keep working.
+ALTER TABLE friend_stats ADD COLUMN badges_mask SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER badges;
+-- ---------------------------------------------------------------------------

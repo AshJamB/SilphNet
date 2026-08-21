@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.11.0 - Gen 2 (Pokemon Gold/Silver, currently Beta in the Gen1Recomp launcher) is now supported alongside Red/Blue/Yellow. HTTP requests are also async again, via the engine's new `mod.fetch` API (a real, documented replacement for the `love.thread` capability an earlier engine update permanently blocked). Falls back to the old synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
+**Status: v1.12.0 - Every gym (Gen1 Kanto, Gen2 Johto, Gen2 Kanto) now has its own sign listing which of your accepted friends already hold that badge, and a league leaderboard sign near the Elite Four entrance ranks total league clears (ALL PLAYERS / FRIENDS, ascending or descending). Both placed at runtime with no hardcoded coordinates, and both show server-computed names/numbers only - no free text. Gen 2 (Pokemon Gold/Silver, currently Beta in the Gen1Recomp launcher) is supported alongside Red/Blue/Yellow. HTTP requests are also async, via the engine's `mod.fetch` API (a real, documented replacement for the `love.thread` capability an earlier engine update permanently blocked), falling back to synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
@@ -442,6 +442,8 @@ at it.
 11. Done - friend detail screen (press A on a friend in the friends list): self-reported stats (badges, Pokédex seen/caught, League wins, money) plus latest activity - currently catches only, shown on two lines ("CAUGHT LVL 25" / "BLASTOISE") - with its own time-ago, and last-seen repeated from the main friends list
 12. Done (partial) - auto status updates: driven by the real `pokemon.caught` event (not a poll), including level from the event's own payload, uploaded immediately independent of the slower ~3 min stats cycle. Trainer-battle events ("DFTD BUG CATCHER" etc.) are NOT wired up - see the corrected note on item 12 below, this was originally overstated as straightforwardly buildable and isn't. Level-up/badge-earned/League-win also aren't wired up yet.
 13. Done - real game version detection: `game.save.version` (confirmed directly from the engine's own `SaveData.lua`) replaces the permanent "UNKNOWN" placeholder that had sat unverified for most of this project. A friend who's genuinely played more than one version (e.g. cleared a BLUE run, then started a fresh YELLOW one) shows a version tag on the friends list ("1/3 (BLUE)") and can be viewed per-version on the friend detail screen (**SELECT** cycles versions there) - both only appear once a friend actually has more than one to disambiguate.
+14. Done - friends-who-cleared-this-gym sign (see item 11 below for the original planning note): a genuinely separate sign/NPC, not a rewrite of any vanilla statue's frozen per-map text, placed in every gym across all three supported runs (Gen1 Kanto, Gen2 Johto, Gen2 Kanto). Lists which of your accepted friends already hold that specific gym's badge, via a new per-account `badges_mask` bit (one bit per real badge id, uploaded alongside the existing stats snapshot). Solves the placement problem the original note worried about (checking every gym's layout map-by-map) without needing to: placement is discovered live at runtime via `mod.world:mapOverview()`'s read-only collision snapshot, searching a small plus/3x3 neighbourhood around wherever YOU yourself just walked in (`mod.world:current()`) for the first walkable, non-warp, unoccupied tile - guaranteed safe by construction, since a neighbour of a tile you just stood on is necessarily reachable ground, with zero hardcoded coordinates (this project ships no ROM data).
+15. Done - league leaderboard sign, the "first-to-clear-the-league" idea from item 14 below, generalized to a full ranked list rather than just first place: a new sign near the Elite Four entrance (`INDIGO_PLATEAU_LOBBY`) shows total league clears (`SUM(league_wins)` across every game_version an account has played, one combined number per person) with two pages (ALL PLAYERS top 50 / FRIENDS-only) and a descending/ascending toggle. Server-computed names/Trainer IDs/numbers only, same no-free-text policy as everything else in this mod.
 
 ### Next up
 
@@ -450,18 +452,21 @@ added yet, the mod has little to offer a new player. Grounded against
 the actual documented mod API (`Reference-Events`, `Reference-Hooks`,
 `Reference-Registries` on the [gen1recomp wiki](https://github.com/bryanthaboi/gen1recomp/wiki)) rather than assumed:
 
-11. **Friends-who-cleared-this-gym sign.** A new, clearly-distinct sign/NPC
-   placed in each gym (not a rewrite of the vanilla statue's own text,
-   which is frozen per-map content the mod can't rewrite per-viewer) -
-   shows which of your friends have beaten that gym leader. Needs a
-   deliberately different look (different sprite, or a `[!]`/`[?]`-style
-   marker rather than a plain statue) and careful placement so it never
-   sits in a trainer's path or blocks a walkway - existing gym layouts
-   need checking map-by-map before placement. Data source: see the
-   corrected note under item 12 below on trainer-battle detection - the
-   gym-leader-specific case has the exact same "no single event gives
-   both identity and outcome" problem as a general "DFTD BUG CATCHER"
-   message would.
+11. **Done - see Shipped item 14 above.** Shipped as "which of your
+   friends already hold this gym's badge" (a per-account `badges_mask`,
+   self-reported the same honest way every other stat in this mod is)
+   rather than "which of your friends beat this gym leader in a
+   detectable battle event" - the original plan's "no single event gives
+   both identity and outcome" problem below (trainer-battle detection)
+   is still real and still unsolved, but badge possession answers the
+   same practical question ("has my friend cleared this gym") without
+   needing it, since a badge can only ever be earned by winning. The
+   placement concern (checking every gym's layout map-by-map ahead of
+   time) also turned out unnecessary - the sign's spot is discovered live
+   at runtime instead (see item 14), so no gym-by-gym layout auditing was
+   needed after all. Still uses the same placeholder sprite as friend
+   markers (`SPRITE_RED`) rather than a dedicated `[!]`/`[?]`-style
+   marker - no confirmed sign sprite exists to reach for yet.
 12. **Auto status updates - catches: Done (see Shipped, item 12 above).**
     Driven by the real `pokemon.caught` event
     (`{ battle, mon, species, isNew, ball, destination, game }`), with
@@ -502,13 +507,16 @@ the actual documented mod API (`Reference-Events`, `Reference-Hooks`,
     right after login/register, cached in `myTrainerId` and never
     re-fetched mid-session) - the save confirmation on `account.php`
     says this explicitly rather than implying an instant update.
-14. **Leaderboards.** Cheapest/safest options rank on data the server
-    already has or can easily start recording: most accepted friends,
-    longest current login streak (consecutive days pinged), most maps
-    visited, first-to-clear-the-league (self-reported, honor system -
-    see item 15). A "most Pokémon caught" or "highest Pokédex count"
+14. **Leaderboards - the league-clears variant is Done (see Shipped item
+    15 above).** The remaining cheapest/safest options still rank on data
+    the server already has or can easily start recording: most accepted
+    friends, longest current login streak (consecutive days pinged), most
+    maps visited. A "most Pokémon caught" or "highest Pokédex count"
     board needs the stats-snapshot mechanism from item 16 first, since
-    that data lives in each player's own save file, not the database.
+    that data lives in each player's own save file, not the database -
+    the same mechanism the shipped league-clears board already reuses
+    (`friend_stats.league_wins`, already uploaded on the existing ~3 min
+    stats cycle).
 
 ### Unblocked - confirmed against the engine's real source
 

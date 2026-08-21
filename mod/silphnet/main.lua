@@ -222,6 +222,17 @@ return function(mod)
         { "push_screen", "SilphNetMarkerTalk", { slot = slot } },
       }
     end
+    -- Two more fixed slots, same "register on every map up front, look up
+    -- the live state at push time" mechanism as the friend-marker slots
+    -- above - NOT a new registration mechanism, since content registries
+    -- (map_scripts included) freeze after the merge phase (see the long
+    -- comment above this function). Both screens read their content from
+    -- module-level state (currentGymBadge/currentGymFriends,
+    -- leagueLeaderboard) at push time, same as SilphNetMarkerTalk already
+    -- does for slotToKey/friends - so this fixed registration never needs
+    -- to change no matter which gym or how many leaderboard rows exist.
+    talk["TEXT_SILPHNET_GYM_SIGN"] = { { "push_screen", "SilphNetGymSign", {} } }
+    talk["TEXT_SILPHNET_LEAGUE_SIGN"] = { { "push_screen", "SilphNetLeagueSign", {} } }
     local count = 0
     local ok, err = pcall(function()
       for mapId in mod.content.maps:each() do
@@ -237,6 +248,78 @@ return function(mod)
   -- Must run HERE, synchronously, during entry-chunk execution - not from
   -- any event handler - per Concepts-Lifecycle's content-registry freeze.
   registerAllMarkerTalkScripts()
+
+  -- ---- gym sign + league leaderboard sign (badge-mask constants) ----------
+  -- Fixed bit position for every individual badge id, shared by BOTH gyms
+  -- (bits 0-7, Kanto - same 8 ids on a Gen1 save and a Gen2 Kanto run) and
+  -- Johto (bits 8-15, Gen2 only) - one flat 16-bit mask per account per
+  -- game_version (see encodeBadgeMask below, badges_mask in schema.sql),
+  -- NOT re-derived from the plain badge COUNT this file already tracks
+  -- (countBadges) - a count alone can't answer "does this friend have
+  -- THIS SPECIFIC badge", which is exactly what the gym sign needs to
+  -- answer. Order here is arbitrary but must never change once shipped -
+  -- every already-uploaded friend_stats.badges_mask row on the server
+  -- was encoded against THIS exact bit order, so reordering these later
+  -- would silently reinterpret every existing row as the wrong badges.
+  local BADGE_BIT_INDEX = {
+    BOULDERBADGE = 0, CASCADEBADGE = 1, THUNDERBADGE = 2, RAINBOWBADGE = 3,
+    SOULBADGE = 4,    MARSHBADGE = 5,   VOLCANOBADGE = 6, EARTHBADGE = 7,
+    ZEPHYRBADGE = 8,  HIVEBADGE = 9,    PLAINBADGE = 10,  FOGBADGE = 11,
+    STORMBADGE = 12,  MINERALBADGE = 13, GLACIERBADGE = 14, RISINGBADGE = 15,
+  }
+
+  -- Reads one bit out of a mask int without the LuaJIT `bit` library -
+  -- that library isn't confirmed on this project's mod-safe require
+  -- allowlist (nothing elsewhere in this file uses it), so plain
+  -- arithmetic is used instead: dividing out every lower bit and taking
+  -- the result mod 2 isolates exactly the target bit, the same technique
+  -- daysFromCivil below already relies on for its own integer math (this
+  -- file avoids Lua 5.3+ operators like // throughout, per that
+  -- function's own comment, for the same real on-device syntax-error
+  -- reason).
+  local function maskHasBit(mask, bit)
+    mask = tonumber(mask) or 0
+    if mask <= 0 then return false end
+    return math.floor(mask / (2 ^ bit)) % 2 >= 1
+  end
+
+  -- Flat mapId -> badgeId table covering every gym across all three runs
+  -- this mod supports (Gen1 Kanto, Gen2 Johto, Gen2 Kanto) - map ids never
+  -- collide across generations/regions, so one flat table is enough; no
+  -- coordinates of any kind live here (this project ships no ROM data -
+  -- see findSafeSignTile below for how the actual sign placement is
+  -- discovered at runtime instead of hardcoded). Gen2 Kanto reuses most
+  -- Gen1 Kanto map ids verbatim (same physical gym, same badge) EXCEPT
+  -- Blaine, who relocated to Seafoam Islands in Gen2 - CINNABAR_GYM and
+  -- SEAFOAM_GYM therefore both map to VOLCANOBADGE and coexist here (one
+  -- real gym per generation, same badge string, looked up by mapId so
+  -- there's no ambiguity about which one a given player is standing in).
+  local GYM_MAP_TO_BADGE = {
+    -- Gen1 Kanto
+    PEWTER_GYM = "BOULDERBADGE", CERULEAN_GYM = "CASCADEBADGE",
+    VERMILION_GYM = "THUNDERBADGE", CELADON_GYM = "RAINBOWBADGE",
+    FUCHSIA_GYM = "SOULBADGE", SAFFRON_GYM = "MARSHBADGE",
+    CINNABAR_GYM = "VOLCANOBADGE", VIRIDIAN_GYM = "EARTHBADGE",
+    -- Gen2 Johto
+    VIOLET_GYM = "ZEPHYRBADGE", AZALEA_GYM = "HIVEBADGE",
+    GOLDENROD_GYM = "PLAINBADGE", ECRUTEAK_GYM = "FOGBADGE",
+    CIANWOOD_GYM = "STORMBADGE", OLIVINE_GYM = "MINERALBADGE",
+    MAHOGANY_GYM = "GLACIERBADGE",
+    BLACKTHORN_GYM_1F = "RISINGBADGE", BLACKTHORN_GYM_2F = "RISINGBADGE",
+    -- Gen2 Kanto (second run - Blaine only, relocated to Seafoam)
+    SEAFOAM_GYM = "VOLCANOBADGE",
+  }
+
+  -- Elite Four entrance - confirmed real via data/scripts/story6.lua in
+  -- Gen1. Deliberately NOT guessing a Gen2-specific id for this same
+  -- lobby (unconfirmed whether Gen2's build even reuses this exact
+  -- constant) - the map.entered hook below registers unconditionally for
+  -- every generation and the whole spawn attempt is wrapped in pcall, so
+  -- on a build where this id doesn't exist at all the hook just never
+  -- matches and silently does nothing, rather than this file guessing
+  -- wrong and either erroring or (worse) silently mislabeling some other
+  -- real Gen2 map as the league entrance.
+  local LEAGUE_SIGN_MAP_ID = "INDIGO_PLATEAU_LOBBY"
 
   local pendingRequests = {}   -- array of { name, trainer_id } - incoming requests awaiting YOUR accept
   local addFriendStatus = ""   -- last add-friend result, shown briefly on the Add Friend screen
@@ -557,9 +640,15 @@ return function(mod)
   -- "if req and req.name" guard on the requests screen). Restricting the
   -- scan to between the array's [ and ] means an empty array correctly
   -- yields zero records instead of one fake one.
-  local function parseObjects(body)
+  -- Shared flat-record extraction, pulled out of parseObjects so it can
+  -- also be reused by parseLeagueLeaderboardJson below on an array body
+  -- that's already been located by name (rather than "the first [...]
+  -- in the whole response", which is all parseObjects itself can find -
+  -- see that function's own comment). Behaviour is unchanged from before
+  -- this was split out - parseObjects still does exactly what it always
+  -- did, just via this shared helper now.
+  local function objectsFromArrayBody(arrayBody)
     local out = {}
-    local arrayBody = string.match(body, "%[(.-)%]")
     if not arrayBody then return out end
     for obj in string.gmatch(arrayBody, "%{[^{}]-%}") do
       local rec = {}
@@ -569,6 +658,29 @@ return function(mod)
       out[#out + 1] = rec
     end
     return out
+  end
+
+  local function parseObjects(body)
+    return objectsFromArrayBody(string.match(body, "%[(.-)%]"))
+  end
+
+  -- league_leaderboard.php's response has TWO top-level flat-object
+  -- arrays ("all" and "friends"), unlike every other endpoint parseObjects
+  -- already covers (which only ever have one) - parseObjects itself only
+  -- ever scans the FIRST [...] in a body, so reusing it directly here
+  -- would silently read "all" twice and never see "friends" at all.
+  -- Each array is located by name first (both are simple flat-object
+  -- arrays with no further nesting, unlike friend_detail's per-entry
+  -- sub-objects, so no brace-depth walk is needed here), then handed to
+  -- the same flat-record extraction parseObjects itself uses via
+  -- objectsFromArrayBody. The anchor after each array ("," for the one
+  -- followed by another field, "}" + end-of-string for the last one)
+  -- mirrors the exact same anchoring online_by_version's parsing already
+  -- relies on to find ITS array boundary correctly.
+  local function parseLeagueLeaderboardJson(body)
+    local allBody = string.match(body, '"all"%s*:%s*%[(.-)%]%s*,%s*"friends"')
+    local friendsBody = string.match(body, '"friends"%s*:%s*%[(.-)%]%s*}%s*$')
+    return objectsFromArrayBody(allBody), objectsFromArrayBody(friendsBody)
   end
 
   -- Keyed by "account_id|game_version", not just account_id - a friend can
@@ -611,6 +723,37 @@ return function(mod)
       end
     end
     return n
+  end
+
+  -- Deduped-by-account_id list of accepted friends' display names who
+  -- have earned a specific badge, for the gym sign talk screen. `friends`
+  -- is already accepted-only (friends.php filters status="accepted"
+  -- server-side) and already keyed "account_id|game_version", so a
+  -- friend with more than one active save can appear more than once here
+  -- if left unchecked - deduped by account_id so someone who earned a
+  -- badge on ANY one of their saves is listed exactly once, not once per
+  -- save. badges_mask arrives from friends.php as a string (parseObjects
+  -- reads every field as a string - see that function's own comment), so
+  -- tonumber() here before maskHasBit, same as every other numeric field
+  -- read out of a parsed HTTP response elsewhere in this file. Sorted
+  -- alphabetically for a stable, predictable read order on the sign
+  -- (rather than "whatever order the friends table happens to iterate
+  -- in", which pairs() never guarantees).
+  local function friendsWithBadge(badgeId)
+    local bit = badgeId and BADGE_BIT_INDEX[badgeId]
+    local names = {}
+    if not bit then return names end
+    local seen = {}
+    for _, f in pairs(friends) do
+      if f.account_id and not seen[f.account_id] then
+        if maskHasBit(tonumber(f.badges_mask), bit) then
+          seen[f.account_id] = true
+          names[#names + 1] = f.name or "?"
+        end
+      end
+    end
+    table.sort(names)
+    return names
   end
 
   -- ---- auth ---------------------------------------------------------------
@@ -672,6 +815,7 @@ return function(mod)
   -- onAuthOk did, made worse by every call site wrapping it in pcall(), so
   -- it would have failed completely silently with no error ever logged.
   local fireFriendsFetch, firePendingFetch, drainHttpResults, fireOnlineCountFetch, fireNearbyFetch
+  local fireLeagueLeaderboardFetch   -- same forward-declare reasoning as the line above - see the comment there
   local fireFriendDetailFetch, fireStatsUpload, fireOnlineByVersionFetch
 
   local function onAuthOk(accId, name, token, trainerId)
@@ -785,6 +929,7 @@ return function(mod)
   local statsUploadActivitySent = nil   -- the activity string currently in flight, or nil - see fireStatsUpload/drainHttpResults
   local sinceStats = 0            -- separate, slower cycle than PRESENCE_INTERVAL - see STATS_INTERVAL
   local STATS_INTERVAL = 180.0    -- 3 min - badges/dex/money/league wins don't need 30s freshness
+  local leagueLeaderboardBusy = false   -- on-demand only, see fireLeagueLeaderboardFetch
 
   -- VANILLA fallback list, same 8 badges/order as the engine's own
   -- src/inventory/Badges.lua - only used if constants.badges is somehow
@@ -838,6 +983,55 @@ return function(mod)
   local function countBadges()
     if isGen2(gameVersion) then return countGen2Badges() end
     return countGen1Badges()
+  end
+
+  -- Encodes WHICH specific badges this save has into one 16-bit mask (see
+  -- BADGE_BIT_INDEX above) - a new function alongside countGen1Badges/
+  -- countGen2Badges rather than a change to either, since those two are
+  -- already relied on elsewhere for the plain BADGES count display and
+  -- this needs to run alongside that, not replace it.
+  --
+  -- Gen1 branch reuses the EXACT SAME enumeration/lookup mechanism as
+  -- countGen1Badges (constants.badges, or VANILLA_BADGES as a fallback;
+  -- save.inventory[entry.item or entry.id] truthiness) - only Kanto
+  -- badges ever apply on a Gen1 save (there is no Johto in Gen1), so
+  -- every id this loop can find already falls in bits 0-7.
+  --
+  -- Gen2 branch reads the two real boolean sets directly off save.player
+  -- (kantoBadges for bits 0-7, badges for bits 8-15) - the same two
+  -- fields countGen2Badges already reads, confirmed directly against
+  -- src/core/gen2/Save.lua (see that function's own comment for the
+  -- full citation) - just keyed here by the specific badge id instead of
+  -- merely counted.
+  local function encodeBadgeMask()
+    local mask = 0
+    if isGen2(gameVersion) then
+      local p = game and game.save and game.save.player
+      if type(p) == "table" then
+        if type(p.kantoBadges) == "table" then
+          for id, bit in pairs(BADGE_BIT_INDEX) do
+            if bit <= 7 and p.kantoBadges[id] then mask = mask + (2 ^ bit) end
+          end
+        end
+        if type(p.badges) == "table" then
+          for id, bit in pairs(BADGE_BIT_INDEX) do
+            if bit >= 8 and p.badges[id] then mask = mask + (2 ^ bit) end
+          end
+        end
+      end
+    else
+      local ok, list = pcall(function() return mod.content.constants:get("badges") end)
+      if not ok or type(list) ~= "table" or #list == 0 then list = VANILLA_BADGES end
+      local inv = game and game.save and game.save.inventory
+      if inv then
+        for _, entry in ipairs(list) do
+          local id = entry.id
+          local bit = id and BADGE_BIT_INDEX[id]
+          if bit and inv[entry.item or entry.id] then mask = mask + (2 ^ bit) end
+        end
+      end
+    end
+    return mask
   end
 
   -- Reads everything the stats snapshot needs from game.save directly -
@@ -1036,6 +1230,7 @@ return function(mod)
 
     return {
       badges = countBadges(),
+      badgesMask = encodeBadgeMask(),
       pokedexSeen = seen,
       pokedexCaught = caught,
       leagueWins = leagueWins,
@@ -1109,6 +1304,16 @@ return function(mod)
   -- empty/zero real answer" convention as onlineCount.
   local onlineByVersion = nil
 
+  -- { all = {...}, friends = {...} } from the last successful
+  -- league_leaderboard.php fetch, each an array of { account_id, name,
+  -- trainer_id, total } already sorted DESCENDING by the server (see
+  -- that endpoint) - nil until the first successful fetch, same "nil
+  -- means haven't heard back yet" convention as onlineByVersion/
+  -- onlineCount. Ascending/descending is a pure client-side toggle (see
+  -- SilphNetLeagueSign's leagueSortAsc below) - reversing this array in
+  -- place rather than needing a second request for the opposite order.
+  local leagueLeaderboard = nil
+
   local function firePresencePing()
     if authState ~= "authed" or not myMap then return end
     presenceBusy = true
@@ -1160,6 +1365,22 @@ return function(mod)
     httpAsyncGet("online_by_version", "/online_by_version.php", { token = mod.save:get("token") or "" })
   end
 
+  -- On-demand only, same reasoning as fireOnlineByVersionFetch/
+  -- fireFriendDetailFetch above - fired once when the league sign near
+  -- INDIGO_PLATEAU_LOBBY successfully spawns (see the map.entered wiring
+  -- further down) rather than kept on the background 30s cycle, since
+  -- this is only ever useful right as a player is actually about to walk
+  -- into the Elite Four. Also fired lazily from SilphNetLeagueSign's own
+  -- update(dt) if leagueLeaderboard is still nil by the time the screen
+  -- opens - the exact same "fetch on demand if a screen wants fresher
+  -- data than it's already been given" fallback SilphNetOnline already
+  -- uses for onlineByVersion.
+  fireLeagueLeaderboardFetch = function()
+    if authState ~= "authed" then return end
+    leagueLeaderboardBusy = true
+    httpAsyncGet("league_leaderboard", "/league_leaderboard.php", { token = mod.save:get("token") or "" })
+  end
+
   -- On-demand only - fired once when SilphNetFriendDetail opens, NOT on
   -- the 30s presence cycle. Unlike friends/pending/online-count/nearby,
   -- this is about ONE specific friend the player has chosen to look at
@@ -1188,6 +1409,7 @@ return function(mod)
     local fields = { token = mod.save:get("token") or "", game_version = gameVersion }
     if statsFields then
       fields.badges = statsFields.badges
+      fields.badges_mask = statsFields.badgesMask
       fields.pokedex_seen = statsFields.pokedexSeen
       fields.pokedex_caught = statsFields.pokedexCaught
       fields.league_wins = statsFields.leagueWins
@@ -1240,6 +1462,137 @@ return function(mod)
     local h
     pcall(function() h = mod.world:npc(myMap, "SILPHNET_FRIEND_" .. id) end)
     if h then pcall(h.face, h, facing) end
+  end
+
+  -- ---- gym sign + league leaderboard sign (runtime placement) -------------
+  -- Every offset tried when hunting for a safe tile to plant a static
+  -- sign, plus-shape cardinals first (the more natural "just beside you"
+  -- placement), corners as a fallback if all four cardinals are blocked
+  -- or occupied. Deliberately searched relative to the PLAYER's OWN
+  -- current tile (mod.world:current()), never a fixed/hardcoded
+  -- coordinate - this project ships no ROM data (README/CLAUDE.md), so
+  -- no real gym's layout can ever be baked into this file. This also
+  -- guarantees safety by construction: whatever tile the player is
+  -- standing on right now is necessarily walkable ground they themselves
+  -- just reached, so a neighbour of it that ALSO reads as walkable via
+  -- mod.world:mapOverview()'s live collision snapshot is safe too,
+  -- without this file ever needing to know a single real map's actual
+  -- floor plan ahead of time.
+  local SIGN_SEARCH_OFFSETS = {
+    { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 },      -- plus shape (cardinal), tried first
+    { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 },    -- corners, tried second
+  }
+
+  -- overview.rows[y+1]:sub(x+1,x+1) per MapOverview's own build() contract
+  -- (confirmed directly against the engine's real src/world/MapOverview.lua):
+  -- "." plain walkable ground, "~" walkable water, "+" a warp tile, " " a
+  -- blocked/wall cell. Warp tiles are excluded here simply by never being
+  -- one of the two accepted characters - not a separate check against
+  -- overview.markers - since the collision grid itself already encodes
+  -- "is this a warp" directly in the same character every other
+  -- walkability check here already reads.
+  local function isWalkableSignChar(c)
+    return c == "." or c == "~"
+  end
+
+  -- occupied is an optional set of "x,y" keys (current friend markers on
+  -- this map, say) to also treat as unavailable, so a sign never lands
+  -- exactly on top of an already-spawned friend silhouette. Returns
+  -- x, y (both nil if genuinely nothing safe was found within the
+  -- searched neighbourhood - callers must handle that by simply not
+  -- spawning a sign at all, never by falling back to a guessed tile).
+  local function findSafeSignTile(mapId, occupied)
+    local cur = mod.world:current()
+    if not cur or cur.mapId ~= mapId or not cur.x or not cur.y then return nil end
+    local ok, overview = pcall(mod.world.mapOverview, mod.world)
+    if not ok or not overview or type(overview.rows) ~= "table" then return nil end
+    for _, off in ipairs(SIGN_SEARCH_OFFSETS) do
+      local x, y = cur.x + off[1], cur.y + off[2]
+      if x >= 0 and y >= 0 and y < #overview.rows then
+        local row = overview.rows[y + 1]
+        local c = row and row:sub(x + 1, x + 1)
+        if c and isWalkableSignChar(c) then
+          local key = x .. "," .. y
+          if not (occupied and occupied[key]) then return x, y end
+        end
+      end
+    end
+    return nil
+  end
+
+  -- Current gym-sign state, read by SilphNetGymSign at push time (same
+  -- "look it up live, don't freeze it at registration" pattern
+  -- SilphNetMarkerTalk already uses for slotToKey/friends) - only one
+  -- gym sign can meaningfully exist at once (you're only ever standing
+  -- in one gym), so this is a single slot, not a table keyed by map.
+  local gymSignNpc = nil          -- { npcId, mapId } or nil
+  local currentGymBadge = nil     -- badge id string the sign currently describes, or nil
+
+  local function despawnGymSign()
+    if gymSignNpc and gymSignNpc.npcId ~= nil then pcall(mod.world.removeNpc, mod.world, gymSignNpc.npcId) end
+    gymSignNpc = nil
+    currentGymBadge = nil
+  end
+
+  -- Not a per-friend spawn like spawnMarker (one NPC, one slot, one
+  -- specific friend) - one single sign NPC whose talk screen reads the
+  -- WHOLE deduped friend list for this gym's badge at push time
+  -- (currentGymFriends is recomputed fresh every time SilphNetGymSign
+  -- opens anyway, via friendsWithBadge, so this doesn't even need to be
+  -- cached here - only currentGymBadge, so the screen knows which badge
+  -- to ask about).
+  local function spawnGymSign(mapId, badgeId)
+    local occupied = {}
+    for _, m in pairs(markers) do
+      if m.mapId == mapId then occupied[m.x .. "," .. m.y] = true end
+    end
+    local x, y = findSafeSignTile(mapId, occupied)
+    if not x then
+      mod.log:warn("SilphNet: no safe tile found for gym sign on %s", tostring(mapId))
+      return
+    end
+    local objDef = { index = allocIndex("SILPHNET_GYM_SIGN"), x = x, y = y, sprite = MY_SPRITE,
+                      movement = "STAY", range = "NONE", name = "SILPHNET_GYM_SIGN",
+                      text = "TEXT_SILPHNET_GYM_SIGN" }
+    local ok, npcId = pcall(mod.world.spawnNpc, mod.world, mapId, objDef)
+    if not ok then
+      mod.log:warn("SilphNet: gym sign spawn failed on %s: %s", tostring(mapId), tostring(npcId))
+      return
+    end
+    gymSignNpc = { npcId = npcId, mapId = mapId }
+    currentGymBadge = badgeId
+  end
+
+  -- League leaderboard sign - same single-slot shape as the gym sign
+  -- above, just for one fixed map (LEAGUE_SIGN_MAP_ID) instead of
+  -- whichever gym GYM_MAP_TO_BADGE currently matches.
+  local leagueSignNpc = nil   -- { npcId, mapId } or nil
+
+  local function despawnLeagueSign()
+    if leagueSignNpc and leagueSignNpc.npcId ~= nil then pcall(mod.world.removeNpc, mod.world, leagueSignNpc.npcId) end
+    leagueSignNpc = nil
+  end
+
+  local function spawnLeagueSign(mapId)
+    local occupied = {}
+    for _, m in pairs(markers) do
+      if m.mapId == mapId then occupied[m.x .. "," .. m.y] = true end
+    end
+    local x, y = findSafeSignTile(mapId, occupied)
+    if not x then
+      mod.log:warn("SilphNet: no safe tile found for league sign on %s", tostring(mapId))
+      return
+    end
+    local objDef = { index = allocIndex("SILPHNET_LEAGUE_SIGN"), x = x, y = y, sprite = MY_SPRITE,
+                      movement = "STAY", range = "NONE", name = "SILPHNET_LEAGUE_SIGN",
+                      text = "TEXT_SILPHNET_LEAGUE_SIGN" }
+    local ok, npcId = pcall(mod.world.spawnNpc, mod.world, mapId, objDef)
+    if not ok then
+      mod.log:warn("SilphNet: league sign spawn failed on %s: %s", tostring(mapId), tostring(npcId))
+      return
+    end
+    leagueSignNpc = { npcId = npcId, mapId = mapId }
+    fireLeagueLeaderboardFetch()
   end
 
   -- Deterministic civil-date -> days-since-epoch conversion (Howard
@@ -2661,6 +3014,20 @@ return function(mod)
           else
             mod.log:info("SilphNet: online-by-version fetch failed: %s", tostring(body))
           end
+        elseif tag == "league_leaderboard" then
+          leagueLeaderboardBusy = false
+          if status == "OK" and jsonIsOk(body) then
+            local all, friendsList = parseLeagueLeaderboardJson(body)
+            leagueLeaderboard = { all = all, friends = friendsList }
+          else
+            -- Deliberately no state change beyond clearing the busy flag -
+            -- leagueLeaderboard is left however it was (nil on a first
+            -- failed attempt, or the last good snapshot on a later one),
+            -- same "keep showing the last known-good data rather than
+            -- blanking it on one bad request" convention friends/nearby
+            -- already follow elsewhere in this file.
+            mod.log:info("SilphNet: league leaderboard fetch failed: %s", tostring(body))
+          end
         else
           handleHttpResult(tag, status, body)
         end
@@ -2736,14 +3103,45 @@ return function(mod)
 
   mod.events:on("map.entered", function(ev)
     despawnAllMarkers()
+    despawnGymSign()
+    despawnLeagueSign()
     inOverworld = true
     myMap = ev.mapId
     local cur = mod.world:current()
     if cur then myX, myY, myFacing = cur.x, cur.y, cur.facing end
     refreshMarkers()
+
+    -- Gym sign: only ever attempted on a map GYM_MAP_TO_BADGE actually
+    -- lists (every real gym across Gen1 Kanto/Gen2 Johto/Gen2 Kanto - see
+    -- that table's own comment) - wrapped in pcall same as the league
+    -- sign below, since findSafeSignTile/spawnNpc both touch live engine
+    -- state (mapOverview, current()) that this file has no way to fully
+    -- guarantee never errors on every build.
+    local badgeId = GYM_MAP_TO_BADGE[myMap]
+    if badgeId then
+      pcall(spawnGymSign, myMap, badgeId)
+    end
+
+    -- League leaderboard sign: registered UNCONDITIONALLY (this hook
+    -- always runs, on every map.entered, regardless of generation) - see
+    -- LEAGUE_SIGN_MAP_ID's own comment for why this deliberately does
+    -- NOT try to guess a separate Gen2 map id. The whole attempt is
+    -- wrapped in pcall specifically so a build where this map id simply
+    -- doesn't exist (or behaves unexpectedly) silently no-ops instead of
+    -- erroring - myMap simply won't equal the one real confirmed id on
+    -- such a build, so this is normally just a cheap string comparison
+    -- that does nothing at all.
+    if myMap == LEAGUE_SIGN_MAP_ID then
+      pcall(spawnLeagueSign, myMap)
+    end
   end)
 
-  mod.events:on("map.exited", function() inOverworld = false; despawnAllMarkers() end)
+  mod.events:on("map.exited", function()
+    inOverworld = false
+    despawnAllMarkers()
+    despawnGymSign()
+    despawnLeagueSign()
+  end)
 
   -- Real, documented event (Reference-Events: payload { battle, mon,
   -- species, isNew, ball, destination, game }) - not a poll-and-diff
@@ -3122,6 +3520,166 @@ return function(mod)
           Font.drawBox(0, 0, 20, 6)
           Font.draw(name:sub(1, 16), 16, 8)
           Font.draw("A/B:CLOSE", 16, 32)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Gym sign talk screen - pushed by TEXT_SILPHNET_GYM_SIGN (registered
+  -- on every map up front, see registerAllMarkerTalkScripts) whenever the
+  -- player talks to the sign spawnGymSign placed near where they walked
+  -- into a gym (see the map.entered wiring). currentGymBadge is looked
+  -- up HERE, at push time, same "never frozen at registration" rule
+  -- SilphNetMarkerTalk already follows for its own slot lookup - the
+  -- friend list itself (friendsWithBadge) is recomputed fresh on push
+  -- too, then snapshotted into `names` for this screen's own lifetime so
+  -- self.index always indexes into a stable list even if a background
+  -- friends re-fetch changes the live `friends` table while this screen
+  -- happens to be open.
+  --
+  -- Only ever displays server-known friend display names - no free text
+  -- of any kind (see this project's no-chat/no-DM policy) - each name
+  -- here is exactly the same already-validated display name shown
+  -- everywhere else a friend's name appears in this file.
+  pcall(function()
+    mod.content.screens:register("SilphNetGymSign", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local badgeId = currentGymBadge
+        local names = friendsWithBadge(badgeId)
+        local self = { game = g, isOpaque = true, index = 1 }
+        function self:update(dt)
+          local n = #names
+          if n > 0 then
+            if g.input:wasPressed("down") then
+              self.index = (self.index % n) + 1
+            elseif g.input:wasPressed("up") then
+              self.index = self.index - 1
+              if self.index < 1 then self.index = n end
+            end
+          end
+          if g.input:wasPressed("b") or g.input:wasPressed("a") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 8)
+          -- Every real badge id is well under the 16-char/line budget
+          -- (CASCADEBADGE/RAINBOWBADGE/VOLCANOBADGE/MINERALBADGE/
+          -- GLACIERBADGE are the longest at 12 chars) - :sub(1,16) is
+          -- purely the same defensive cap every other title line in this
+          -- file already applies, not expected to ever actually truncate.
+          Font.draw((badgeId or "GYM BADGE"):sub(1, 16), 16, 8)
+          local n = #names
+          if n == 0 then
+            Font.draw("NO FRIENDS HAVE", 16, 32)
+            Font.draw("THIS BADGE YET", 16, 40)
+          else
+            if self.index > n then self.index = 1 end
+            Font.draw(self.index .. "/" .. n, 16, 24)
+            Font.draw(names[self.index]:sub(1, 16), 16, 40)
+            if n > 1 then Font.draw("UD:PAGE", 16, 56) end
+          end
+          Font.draw("A/B:CLOSE", 16, 64)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- League leaderboard sign talk screen - pushed by TEXT_SILPHNET_LEAGUE_SIGN
+  -- near the Elite Four entrance (see spawnLeagueSign/LEAGUE_SIGN_MAP_ID).
+  -- Two independent axes, same "two axes on one screen" convention
+  -- SilphNetOnline already established (LEFT/RIGHT there cycles versions,
+  -- UP/DOWN cycles players within one) - here LEFT/RIGHT flips between
+  -- the ALL PLAYERS and FRIENDS pages, UP/DOWN pages through whichever
+  -- list is currently showing, and SELECT toggles ascending/descending
+  -- (an already-established "extra button beyond A/B/D-pad for a
+  -- secondary per-screen action" convention - SilphNetFriends already
+  -- uses SELECT for its own reset-confirm shortcut).
+  --
+  -- Sorting is entirely client-side (see league_leaderboard.php's own
+  -- comment - the server only ever returns ONE order, descending) -
+  -- ascending is just that same array read back to front into a fresh
+  -- table, never a re-sort and never a second request, so toggling is
+  -- instant regardless of how many rows came back.
+  --
+  -- Only ever displays server-computed names/trainer ids/numbers - no
+  -- free text of any kind, same no-chat/no-DM policy as the gym sign
+  -- screen above.
+  pcall(function()
+    mod.content.screens:register("SilphNetLeagueSign", {
+      new = function(g)
+        local Font = mod.ui.Font
+        -- Same "fetch on demand when a screen wants fresher data than
+        -- the background cycle already provides" pattern SilphNetOnline
+        -- already uses for onlineByVersion - fired every time this
+        -- screen opens (not just once, ever), so revisiting the sign
+        -- later in the same session shows updated totals rather than a
+        -- permanently stale first snapshot.
+        if not leagueLeaderboardBusy then fireLeagueLeaderboardFetch() end
+        local self = { game = g, isOpaque = true, page = 1, index = 1, sortAsc = false }
+        local function currentList()
+          if not leagueLeaderboard then return nil end
+          local base = (self.page == 1) and leagueLeaderboard.all or leagueLeaderboard.friends
+          if not base or not self.sortAsc then return base end
+          local rev = {}
+          for i = #base, 1, -1 do rev[#rev + 1] = base[i] end
+          return rev
+        end
+        function self:update(dt)
+          pcall(drainHttpResults)
+          local input = g.input
+          if input:wasPressed("left") or input:wasPressed("right") then
+            self.page = (self.page == 1) and 2 or 1
+            self.index = 1
+          end
+          if input:wasPressed("select") then
+            self.sortAsc = not self.sortAsc
+            self.index = 1
+          end
+          local list = currentList()
+          local n = list and #list or 0
+          if n > 0 then
+            if input:wasPressed("down") then
+              self.index = (self.index % n) + 1
+            elseif input:wasPressed("up") then
+              self.index = self.index - 1
+              if self.index < 1 then self.index = n end
+            end
+          end
+          if input:wasPressed("b") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 11)
+          local title = (self.page == 1) and "ALL PLAYERS" or "FRIENDS"
+          Font.draw(("- " .. title .. " -"):sub(1, 16), 16, 8)
+          if leagueLeaderboard == nil then
+            -- Same "nil means haven't heard back yet" convention as
+            -- onlineByVersion/onlineCount elsewhere in this file.
+            Font.draw("CHECKING...", 16, 40)
+          else
+            local list = currentList()
+            local n = list and #list or 0
+            if self.index > n then self.index = 1 end
+            if n == 0 then
+              Font.draw("NO CLEARS YET", 16, 40)
+            else
+              local row = list[self.index]
+              -- The TRUE rank (1 = top scorer overall) is always
+              -- derived from the list's real DESCENDING position, even
+              -- while sortAsc is showing the reversed read order - so
+              -- "#1" always means the actual top scorer, never "first
+              -- one shown on this particular page flip."
+              local rank = self.sortAsc and (n - self.index + 1) or self.index
+              Font.draw(("#" .. rank .. "  " .. self.index .. "/" .. n):sub(1, 16), 16, 24)
+              Font.draw((row.name or "?"):sub(1, 16), 16, 40)
+              Font.draw("ID   " .. (row.trainer_id or "-----"), 16, 48)
+              Font.draw(("CLEARS " .. tostring(row.total or 0)):sub(1, 16), 16, 56)
+              if n > 1 then Font.draw("UD:PAGE", 16, 64) end
+            end
+          end
+          Font.draw("LR:LIST SEL:SORT", 16, 72)
+          Font.draw("B:BACK", 16, 80)
         end
         return self
       end,

@@ -135,6 +135,13 @@ CREATE TABLE IF NOT EXISTS friend_stats (
   account_id     VARCHAR(16) NOT NULL,
   game_version   VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN',
   badges         TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  -- Bitmask of every individual badge id this save has earned (bit N per
+  -- BADGE_BIT_INDEX in main.lua - Kanto badges 0-7, Johto badges 8-15),
+  -- NOT a count - "badges" above already covers "how many", this column
+  -- exists so the gym sign feature can answer "does this specific friend
+  -- have THIS gym's badge" without re-deriving it from anything else.
+  -- SMALLINT UNSIGNED covers all 16 bits (max value 65535).
+  badges_mask    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   pokedex_seen   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   pokedex_caught SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   league_wins    SMALLINT UNSIGNED NOT NULL DEFAULT 0,

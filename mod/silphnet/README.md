@@ -38,3 +38,10 @@ status screen: **A** retries login, **START** opens the friends list,
   `../../archive/tcp_relay_retired/`.
 - Friend requests currently go through `add_friend.php`/`accept_friend.php`
   directly (no in-game screen for it yet) — see `../../README.md` roadmap.
+- Every gym (Gen1 Kanto, Gen2 Johto, Gen2 Kanto) now has its own sign
+  listing which of your accepted friends already hold that gym's badge,
+  placed at runtime near wherever you walk in (never a hardcoded
+  coordinate — this project ships no ROM data). A second sign near the
+  Elite Four entrance (`INDIGO_PLATEAU_LOBBY`) shows a league-clear
+  leaderboard, ALL PLAYERS or FRIENDS, ascending or descending. Both
+  signs only ever show server-computed names/numbers — no free text.
