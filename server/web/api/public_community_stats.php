@@ -48,7 +48,7 @@
 require __DIR__ . '/db.php';
 
 const SILPHNET_PUBLIC_ONLINE_AFTER_SECONDS = 300;
-const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER'];
+const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'CRYSTAL'];
 
 try {
     $pdo = silphnet_db();

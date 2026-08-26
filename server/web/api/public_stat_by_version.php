@@ -19,7 +19,7 @@
 // correctly absent from this list, not just ranked last.
 //
 // GET: stat=pokedex_seen|pokedex_caught|badges|league_wins,
-//      game_version=RED|BLUE|YELLOW|GOLD|SILVER
+//      game_version=RED|BLUE|YELLOW|GOLD|SILVER|CRYSTAL
 // Returns: {"ok":true,"stat":"pokedex_caught","game_version":"RED",
 //   "players":[{"name","trainer_id","total"}, ...]}   (top 50, ranked
 //   DESC on that one version's own value, 0 totals excluded, ties broken
@@ -34,13 +34,13 @@
 
 require __DIR__ . '/db.php';
 
-const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER'];
+const SILPHNET_PUBLIC_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'CRYSTAL'];
 const SILPHNET_STAT_COLUMNS = ['pokedex_seen', 'pokedex_caught', 'badges', 'league_wins'];
 const SILPHNET_STAT_BY_VERSION_LIMIT = 50;
 
 $version = strtoupper(trim($_GET['game_version'] ?? ''));
 if (!in_array($version, SILPHNET_PUBLIC_TRACKED_VERSIONS, true)) {
-    silphnet_error('game_version must be one of RED, BLUE, YELLOW, GOLD, SILVER');
+    silphnet_error('game_version must be one of RED, BLUE, YELLOW, GOLD, SILVER, CRYSTAL');
 }
 
 $stat = strtolower(trim($_GET['stat'] ?? ''));

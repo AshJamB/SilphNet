@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.12.8)
+-- SilphNet - async presence + friends (v1.13.0)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -363,40 +363,48 @@ return function(mod)
   end
 
   -- game.save.version is confirmed real (see the comment above gameVersion's
-  -- declaration) - "red"/"blue"/"yellow"/"gold"/"silver", always non-nil
-  -- once a save exists (GameVersion.VERSIONS - Gold and Silver are Gen 2,
-  -- currently Beta in the launcher). Uppercased to match this project's
-  -- existing RED/BLUE/YELLOW/GOLD/SILVER/UNKNOWN convention (schema.sql,
-  -- every server endpoint's validation list). GOLD/SILVER are now sent
-  -- as-is, not collapsed to UNKNOWN - see isGen2(), countBadges(), and
-  -- readStatsSnapshot() below for the real save-shape differences a Gen 2
-  -- save needs handled (money/badges/pokedex.caught/hallOfFame all live
-  -- somewhere different there - confirmed directly against the engine's
-  -- real src/core/gen2/Save.lua, not guessed). Falls back to UNKNOWN (not
-  -- an error) if game.save isn't ready yet or version is missing entirely -
-  -- shouldn't happen per the guaranteed-migration confirmation, but this
-  -- function runs at game.ready, right as save loading finishes, so a
-  -- defensive fallback costs nothing.
+  -- declaration) - "red"/"blue"/"yellow"/"gold"/"silver"/"crystal", always
+  -- non-nil once a save exists (GameVersion.VERSIONS, confirmed directly
+  -- against the engine's real src/core/GameVersion.lua as of the update
+  -- that added Crystal - Gold and Silver are no longer Beta in the
+  -- launcher, launcherName is just "Gold"/"Silver" there now; Crystal is
+  -- the new one, launcherName = "Crystal (Beta)"). Uppercased to match
+  -- this project's existing RED/BLUE/YELLOW/GOLD/SILVER/CRYSTAL/UNKNOWN
+  -- convention (schema.sql, every server endpoint's validation list).
+  -- CRYSTAL is sent as-is, not collapsed to UNKNOWN, the same way
+  -- GOLD/SILVER were added previously - see isGen2(), countBadges(), and
+  -- readStatsSnapshot() below for the real save-shape a Gen 2 save needs
+  -- handled (money/badges/pokedex.caught/hallOfFame all live somewhere
+  -- different there). Falls back to UNKNOWN (not an error) if game.save
+  -- isn't ready yet or version is missing entirely - shouldn't happen per
+  -- the guaranteed-migration confirmation, but this function runs at
+  -- game.ready, right as save loading finishes, so a defensive fallback
+  -- costs nothing.
   local function resolveGameVersion()
     local v = game and game.save and game.save.version
     if type(v) ~= "string" then return "UNKNOWN" end
     v = v:upper()
-    if v == "RED" or v == "BLUE" or v == "YELLOW" or v == "GOLD" or v == "SILVER" then return v end
+    if v == "RED" or v == "BLUE" or v == "YELLOW" or v == "GOLD" or v == "SILVER" or v == "CRYSTAL" then return v end
     return "UNKNOWN"
   end
 
-  -- Gen 2 (Gold/Silver) save shape differs from Gen 1 in exactly the ways
-  -- documented below - confirmed directly against the engine's real
+  -- Gen 2 (Gold/Silver/Crystal) save shape differs from Gen 1 in exactly the
+  -- ways documented below - confirmed directly against the engine's real
   -- src/core/gen2/Save.lua, not guessed by analogy (this project has been
-  -- burned by that before - see readStatsSnapshot's money comment). This
-  -- is a legitimate per-cart-CONTENT check (the save's actual field
-  -- layout genuinely differs), not the "version allow-list as a feature
-  -- gate" anti-pattern docs/preparing-your-mod-for-gen2.md warns against -
-  -- every other read in this file (party, playTime, pokedex.seen,
-  -- presence/friends/markers, every event) is already generation-agnostic
-  -- and untouched.
+  -- burned by that before - see readStatsSnapshot's money comment). Crystal
+  -- shares this SAME Save.lua module with Gold/Silver - money, badges,
+  -- pokedex, and hallOfFame are read identically for all three; Crystal's
+  -- own extras (save.crystal, save.battleTower) are separate fields this
+  -- mod has no reason to touch, confirmed by reading that module directly
+  -- rather than assuming Crystal needed its own branch here. This is a
+  -- legitimate per-cart-CONTENT check (the save's actual field layout
+  -- genuinely differs from Gen 1), not the "version allow-list as a
+  -- feature gate" anti-pattern docs/preparing-your-mod-for-gen2.md warns
+  -- against - every other read in this file (party, playTime,
+  -- pokedex.seen, presence/friends/markers, every event) is already
+  -- generation-agnostic and untouched.
   local function isGen2(version)
-    return version == "GOLD" or version == "SILVER"
+    return version == "GOLD" or version == "SILVER" or version == "CRYSTAL"
   end
 
   -- ---- HTTP plumbing ------------------------------------------------------
@@ -1178,8 +1186,12 @@ return function(mod)
   -- but pokedex/hallOfFame/money/badges all are.
   --
   -- Three of these fields live at a genuinely different path on a Gen 2
-  -- (Gold/Silver) save - confirmed directly against src/core/gen2/Save.lua,
-  -- not guessed:
+  -- (Gold/Silver/Crystal) save - confirmed directly against
+  -- src/core/gen2/Save.lua, not guessed. Crystal shares this exact same
+  -- Save.lua module and field layout with Gold/Silver (its own extras -
+  -- save.crystal, save.battleTower - are separate fields this mod never
+  -- touches), so no Crystal-specific branch is needed here beyond isGen2()
+  -- already recognizing it:
   --   money:         save.player.money on Gen 2 (Gen 1: top-level save.money)
   --   pokedexCaught: save.pokedex.caught on Gen 2 (Gen 1: save.pokedex.owned -
   --                  .seen is the same key on both, so that one's untouched)
@@ -2294,10 +2306,11 @@ return function(mod)
             -- everywhere else it's shown).
             Font.draw("ID   " .. (f.trainer_id or "-----"), 16, 48)
             -- Version tag now lives HERE, next to ONLINE, not on the page
-            -- counter line - "ONLINE (YELLOW)" is 15 chars at the longest
-            -- real version name, comfortably under the 16-char budget
-            -- (checked by hand: RED=12, BLUE=13, YELLOW=15, GOLD=13,
-            -- SILVER=15 - same length as YELLOW, still under budget).
+            -- counter line - checked by hand against every real version
+            -- name: RED=12, BLUE=13, YELLOW=15, GOLD=13, SILVER=15,
+            -- CRYSTAL=16 (the longest - "ONLINE (CRYSTAL)" lands exactly
+            -- on the 16-char/line budget, not past it, the same way other
+            -- exactly-16-char lines elsewhere in this file already do).
             -- Still only shown while this specific entry is ONLINE -
             -- offline, no version at all, regardless of how many
             -- versions this friend has (per earlier direct feedback:
@@ -3645,13 +3658,17 @@ return function(mod)
             -- ONLINE / BLUE: 3 ONLINE / YELLOW: 1 ONLINE"). Labels
             -- right-padded to align the counts in a column, same
             -- left-label/right-value convention used elsewhere in this
-            -- file (BADGES/SEEN/CAUGHT etc. on the STATS page) - YELLOW
-            -- and SILVER (6 chars each) are the longest labels, so
-            -- RED/BLUE/GOLD pad out to match them.
+            -- file (BADGES/SEEN/CAUGHT etc. on the STATS page) - CRYSTAL
+            -- (7 chars) is now the longest label since Crystal was added,
+            -- so every shorter label pads out to 7 instead of the old 6
+            -- (which fit YELLOW/SILVER exactly). A too-short pad would
+            -- have quietly misaligned columns rather than overflowed
+            -- anything - the full line stays well under the 16-char/line
+            -- budget even at a 7-wide label.
             Font.draw("- ONLINE -", 16, 8)
             for i, v in ipairs(onlineByVersion) do
               local label = v.game_version
-              label = label .. string.rep(" ", 6 - #label)
+              label = label .. string.rep(" ", 7 - #label)
               Font.draw((label .. " " .. v.count .. " ON"):sub(1, 16), 16, 40 + (i - 1) * 16)
             end
             if #onlineByVersion > 0 then Font.draw("LR:VERSION", 16, 120) end

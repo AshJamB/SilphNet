@@ -45,7 +45,7 @@ require __DIR__ . '/auth.php';
 $account = silphnet_require_token();
 
 $version = strtoupper(trim($_POST['game_version'] ?? $_GET['game_version'] ?? 'UNKNOWN'));
-if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'UNKNOWN'], true)) $version = 'UNKNOWN';
+if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'CRYSTAL', 'UNKNOWN'], true)) $version = 'UNKNOWN';
 
 $hasStats = isset($_POST['badges']) || isset($_GET['badges']) || isset($_POST['badges_mask']) || isset($_GET['badges_mask'])
     || isset($_POST['pokedex_seen']) || isset($_GET['pokedex_seen'])

@@ -249,6 +249,7 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   .v-swatch.yellow { background: #f6d648; }
   .v-swatch.gold { background: #c9a13b; }
   .v-swatch.silver { background: #b9c0c6; }
+  .v-swatch.crystal { background: #4dd0c4; }
   .player-list { margin-bottom: 4px; }
   .player-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -545,10 +546,15 @@ const VERSION_META = {
   RED: { label: 'Red', swatch: 'red' },
   BLUE: { label: 'Blue', swatch: 'blue' },
   YELLOW: { label: 'Yellow', swatch: 'yellow' },
-  // Gen 2, currently Beta in the Gen1Recomp launcher - same treatment as
-  // the Gen 1 versions above, just with their own swatch colours.
+  // Gen 2 - Gold and Silver are no longer Beta in the Gen1Recomp launcher
+  // (confirmed against the engine's own src/core/GameVersion.lua: their
+  // launcherName is now just "Gold"/"Silver", no "(Beta)" suffix). Crystal
+  // is the new one still marked Beta there ("Crystal (Beta)") - shares
+  // Gold/Silver's same save format one-for-one (main.lua's isGen2()), just
+  // its own swatch colour here.
   GOLD: { label: 'Gold', swatch: 'gold' },
   SILVER: { label: 'Silver', swatch: 'silver' },
+  CRYSTAL: { label: 'Crystal', swatch: 'crystal' },
 };
 let lastOnlineData = null;   // cached summary, so "back" doesn't need a re-fetch
 
@@ -899,8 +905,8 @@ function renderRankedTable(container, list, emptyText) {
 
 // Renders the per-version breakdown, highest count first (owner's own
 // request - "order them by most to least") rather than the fixed
-// RED/BLUE/YELLOW/GOLD/SILVER tracked-version order the API returns them
-// in. Sorted here in JS on a COPY of the array (slice) - communityStatsData
+// RED/BLUE/YELLOW/GOLD/SILVER/CRYSTAL tracked-version order the API
+// returns them in. Sorted here in JS on a COPY of the array (slice) - communityStatsData
 // is shared/cached across every stat's modal, so mutating its own
 // versions array in place would leave the NEXT stat modal opened
 // re-sorted by the wrong stat's numbers.

@@ -1,7 +1,7 @@
 <?php
 // SilphNet - everyone currently online, GLOBALLY (not just friends),
 // grouped by game_version - the data source for the new SN ONLINE
-// screen's per-version pages (RED/BLUE/YELLOW/GOLD/SILVER), which each
+// screen's per-version pages (RED/BLUE/YELLOW/GOLD/SILVER/CRYSTAL), which each
 // list that version's online players the same way nearby.php's single
 // flat list already does for "who's on my map" (name, trainer_id,
 // add-friend status). Replaces online_count.php's single flat number for
@@ -32,23 +32,26 @@
 // ping.php's re-key comment), which isn't a genuine "version" a player is
 // playing so much as a not-yet-identified one; showing an "UNKNOWN: 2
 // ONLINE" page would be confusing rather than useful. RED/BLUE/YELLOW
-// (Gen 1) and now GOLD/SILVER (Gen 2, Beta) are all grouped here -
-// main.lua sends GOLD/SILVER as a real game_version as of the version
-// that added Gen 2 support, not just forward-compatibly accepted and
-// unused.
+// (Gen 1) and GOLD/SILVER/CRYSTAL (Gen 2) are all grouped here - Gold and
+// Silver are no longer Beta in the launcher (confirmed against the
+// engine's own src/core/GameVersion.lua), Crystal is the new Beta-labelled
+// addition, sharing the exact same Gen 2 save shape main.lua's isGen2()
+// already handles. main.lua sends all three as a real game_version, not
+// just forward-compatibly accepted and unused.
 //
 // Versions with zero online players are still included in the "versions"
 // array (with an empty "players" array and count 0) rather than omitted -
 // the client-side summary page wants to show "RED: 0 ONLINE" rather than
-// silently drop a version, so this endpoint always returns exactly five
-// entries, in a fixed RED/BLUE/YELLOW/GOLD/SILVER order, regardless of how
-// many are actually populated.
+// silently drop a version, so this endpoint always returns exactly six
+// entries now (was five, before Crystal), in a fixed
+// RED/BLUE/YELLOW/GOLD/SILVER/CRYSTAL order, regardless of how many are
+// actually populated.
 
 require __DIR__ . '/db.php';
 require __DIR__ . '/auth.php';
 
 const SILPHNET_ONLINE_AFTER_SECONDS = 300;
-const SILPHNET_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER'];
+const SILPHNET_TRACKED_VERSIONS = ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'CRYSTAL'];
 
 $account = silphnet_require_token();
 
