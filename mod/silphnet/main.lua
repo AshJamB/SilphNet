@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.13.2)
+-- SilphNet - async presence + friends (v1.13.3)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -618,13 +618,66 @@ return function(mod)
     end
   end
 
+  -- Decodes the JSON string escapes this project's OWN server-side
+  -- json_encode() calls can actually produce - none of this file's
+  -- hand-rolled field-extraction patterns undid any of these until now,
+  -- so a value containing one came through as the literal ESCAPE TEXT
+  -- instead of the real character. Confirmed as a real, reported bug: a
+  -- friend's activity message ("CAUGHT LVL 56\nSANDSLASH", a genuine
+  -- newline from queueCatchActivity) read back with the literal two
+  -- characters "\" and "n" sitting where the line break should have
+  -- been - a raw gmatch capture with no unescaping is exactly what
+  -- produces that, and the real stored database row (confirmed via a
+  -- direct SQL check) already had the correct newline all along, which
+  -- ruled out the server/database and pointed straight at this parsing
+  -- layer. db.php's silphnet_json() calls plain json_encode($data) with
+  -- no flags, so PHP additionally escapes EVERY non-ASCII byte as
+  -- \uXXXX (no JSON_UNESCAPED_UNICODE) - meaning a gendered Gen 2
+  -- species name's own \xE2\x99\x82/\x80 gender glyph (see GENDER_MALE/
+  -- GENDER_FEMALE below) would have hit this exact same class of bug the
+  -- first time a friend's activity or party page tried to show one,
+  -- just not reported yet. Handles \uXXXX first (its own pass, since a
+  -- generic single-character "\X" substitution would otherwise consume
+  -- the "u" and strand its four hex digits as plain text), then the
+  -- short named escapes JSON actually defines.
+  local function jsonUnescapeUnicode(hex)
+    local code = tonumber(hex, 16) or 0
+    -- Manual UTF-8 encode (floor/modulo only, no bit ops - the plain
+    -- 5.1-compatible way, since this port's own float encoding elsewhere
+    -- in this file already avoids assuming a bit library exists) for any
+    -- BMP code point. \uXXXX can only ever encode one BMP code point
+    -- (0000-FFFF) - a surrogate PAIR would take two consecutive \uXXXX
+    -- escapes to represent one code point above FFFF, which none of
+    -- this project's own real strings (trainer names, species, gender
+    -- glyphs) ever need, so that case is deliberately not handled here.
+    if code < 0x80 then
+      return string.char(code)
+    elseif code < 0x800 then
+      return string.char(0xC0 + math.floor(code / 0x40), 0x80 + (code % 0x40))
+    else
+      return string.char(
+        0xE0 + math.floor(code / 0x1000),
+        0x80 + (math.floor(code / 0x40) % 0x40),
+        0x80 + (code % 0x40))
+    end
+  end
+  local JSON_SIMPLE_ESCAPES = {
+    n = "\n", t = "\t", r = "\r", b = "\b", f = "\f", ['"'] = '"', ["\\"] = "\\", ["/"] = "/",
+  }
+  local function jsonUnescapeString(s)
+    if type(s) ~= "string" or not s:find("\\", 1, true) then return s end
+    s = s:gsub("\\u(%x%x%x%x)", jsonUnescapeUnicode)
+    s = s:gsub("\\(.)", function(c) return JSON_SIMPLE_ESCAPES[c] or c end)
+    return s
+  end
+
   -- Minimal hand-rolled JSON reader for exactly the shapes these five
   -- endpoints return - not a general JSON parser, just enough to pull
   -- flat string/number fields out of a known, server-controlled response,
   -- without adding a JSON dependency.
   local function jsonField(body, key)
     local s = string.match(body, '"' .. key .. '"%s*:%s*"([^"]*)"')
-    if s then return s end
+    if s then return jsonUnescapeString(s) end
     local n = string.match(body, '"' .. key .. '"%s*:%s*(-?%d+%.?%d*)')
     return n
   end
@@ -661,7 +714,7 @@ return function(mod)
     for obj in string.gmatch(arrayBody, "%{[^{}]-%}") do
       local rec = {}
       for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*"?([^",}]*)"?') do
-        rec[k] = v
+        rec[k] = jsonUnescapeString(v)
       end
       out[#out + 1] = rec
     end
@@ -3132,7 +3185,7 @@ return function(mod)
               -- patterns for the same key, since a quoted value's first
               -- char is `"`, which the bare-number pattern's %s*:%s*
               -- lookahead won't accept).
-              for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*"([^"]*)"') do rec[k] = v end
+              for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*"([^"]*)"') do rec[k] = jsonUnescapeString(v) end
               for k, v in string.gmatch(obj, '"([%w_]+)"%s*:%s*(-?%d+%.?%d*)[,}]') do
                 if rec[k] == nil then rec[k] = v end
               end
