@@ -54,6 +54,20 @@ define('SMTP_PASS', 'CHANGE-ME');                 // << EDIT ME - the mailbox's 
 define('SMTP_FROM_ADDRESS', 'silphnet@jamshark.co.uk');
 define('SMTP_FROM_NAME', 'SilphNet');
 
+// -----------------------------------------------------------------------
+// Admin recovery key (admin.php / admin_reset_password.php) - lets YOU
+// (the site owner) generate a one-off password reset link for a friend who
+// has no recovery email on file and can't use the normal forgot-password
+// flow at all. Unlike every other CHANGE-ME above, this one does NOT fail
+// soft - admin_reset_password.php refuses to work at all while this is
+// still 'CHANGE-ME', rather than quietly accepting a well-known default
+// value as a real admin key. Generate a real one the same way as the email
+// key: php -r "echo bin2hex(random_bytes(32));" - then keep it exactly as
+// secret as your own database password, since anyone who has it can reset
+// ANY account's password, no email or other proof needed.
+// -----------------------------------------------------------------------
+define('ADMIN_KEY', 'CHANGE-ME');   // << EDIT ME - set on the server only, never in git
+
 function silphnet_db() {
     static $pdo = null;
     if ($pdo === null) {
