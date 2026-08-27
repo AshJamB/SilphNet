@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.13.0)
+-- SilphNet - async presence + friends (v1.13.1)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -3552,12 +3552,21 @@ return function(mod)
   -- Two independent paging axes, per direct request ("split this into
   -- categories... navigate left and right to more pages... then the
   -- option to add the players like the NEARBY screen"):
-  --   * self.verPage: 0 = summary (every tracked version's count
-  --     together), 1..N = that version's own page, where N is however
-  --     many versions online_by_version.php actually returned (5 as of
-  --     Gen 2 support - RED/BLUE/YELLOW/GOLD/SILVER). LEFT/RIGHT cycles
-  --     this axis, wrapping 0->1->...->N->0 (see pageCount below, not a
-  --     hardcoded count).
+  --   * self.verPage: 0 = Gen 1 summary (RED/BLUE/YELLOW counts), 1 = Gen 2
+  --     summary (GOLD/SILVER/CRYSTAL counts), 2..N+1 = that version's own
+  --     page (onlineByVersion[verPage-1]), where N is however many
+  --     versions online_by_version.php actually returned (6 as of Crystal
+  --     support). LEFT/RIGHT cycles this axis, wrapping 0->1->...->N+1->0
+  --     (see pageCount below, not a hardcoded count).
+  --
+  --     Used to be ONE summary page listing every version together, but
+  --     Crystal made 6 rows - reported directly as "Crystal has now been
+  --     pushed down and is overlapping the mappings at the bottom" (the
+  --     6th row landed exactly on the footer hint text at y=120). Split
+  --     into two summary pages by generation (isGen2()) instead of trying
+  --     to squeeze a 6th row in - each still opens with the SAME combined
+  --     TOTAL ONLINE figure across every game, not just that half, so
+  --     neither page reads as "this is the whole total."
   --   * self.playerIndex: which player (1-based) is showing WITHIN the
   --     current version's page - UP/DOWN cycles this axis, independent
   --     of LEFT/RIGHT, same "two axes on one screen" convention the
@@ -3598,15 +3607,16 @@ return function(mod)
         function self:update(dt)
           pcall(drainHttpResults)
           local input = g.input
-          -- Page count is 1 (summary) + however many versions the server
-          -- actually returned, NOT a hardcoded 4 - that was a real bug
-          -- this Gen 2 pass caught: it silently assumed exactly 3 tracked
-          -- versions (RED/BLUE/YELLOW), which broke the moment
-          -- online_by_version.php started returning 5 (GOLD/SILVER
-          -- added). Before the first successful fetch (onlineByVersion
-          -- still nil) this pins to 1 page, so LEFT/RIGHT are no-ops
-          -- rather than paging into data that doesn't exist yet.
-          local pageCount = 1 + (onlineByVersion and #onlineByVersion or 0)
+          -- Page count is 2 (Gen 1 summary, Gen 2 summary) + however many
+          -- versions the server actually returned, NOT a hardcoded number -
+          -- that was a real bug this Gen 2 pass caught before (it silently
+          -- assumed exactly 3 tracked versions), and the two-summary-page
+          -- split above is the fix for the SAME class of bug resurfacing
+          -- with Crystal (a 6th row, not a 6th page). Before the first
+          -- successful fetch (onlineByVersion still nil) this pins to the
+          -- 2 summary pages, so LEFT/RIGHT can't page into version data
+          -- that doesn't exist yet.
+          local pageCount = 2 + (onlineByVersion and #onlineByVersion or 0)
           if input:wasPressed("right") then
             self.verPage = (self.verPage + 1) % pageCount
             self.playerIndex = 1
@@ -3614,8 +3624,8 @@ return function(mod)
             self.verPage = (self.verPage - 1) % pageCount
             self.playerIndex = 1
           end
-          if self.verPage > 0 and onlineByVersion then
-            local v = onlineByVersion[self.verPage]
+          if self.verPage > 1 and onlineByVersion then
+            local v = onlineByVersion[self.verPage - 1]
             local n = v and #v.players or 0
             if n > 0 then
               if input:wasPressed("down") then
@@ -3631,10 +3641,10 @@ return function(mod)
           -- shortcut SilphNetNearby gained for the same reason (the old
           -- hint text implied a one-button add that didn't actually
           -- exist). Only wired up on a real, addable per-version player
-          -- page - a no-op on the summary page, on an empty version, or
+          -- page - a no-op on either summary page, on an empty version, or
           -- on your own "(YOU)" row.
-          if self.verPage > 0 and onlineByVersion then
-            local v = onlineByVersion[self.verPage]
+          if self.verPage > 1 and onlineByVersion then
+            local v = onlineByVersion[self.verPage - 1]
             local p = v and v.players and v.players[self.playerIndex]
             if input:wasPressed("start") and p and p.trainer_id and p.is_you ~= "true"
                 and not isAlreadyFriend(p.account_id) then
@@ -3652,26 +3662,37 @@ return function(mod)
             -- distinct from a genuine zero-everywhere answer.
             Font.draw("- ONLINE -", 16, 8)
             Font.draw("CHECKING...", 16, 72)
-          elseif self.verPage == 0 then
-            -- Summary page: every tracked version's count together, per
-            -- direct request ("total amount of people online... RED: 4
-            -- ONLINE / BLUE: 3 ONLINE / YELLOW: 1 ONLINE"). Labels
-            -- right-padded to align the counts in a column, same
-            -- left-label/right-value convention used elsewhere in this
-            -- file (BADGES/SEEN/CAUGHT etc. on the STATS page) - CRYSTAL
-            -- (7 chars) is now the longest label since Crystal was added,
-            -- so every shorter label pads out to 7 instead of the old 6
-            -- (which fit YELLOW/SILVER exactly). A too-short pad would
-            -- have quietly misaligned columns rather than overflowed
-            -- anything - the full line stays well under the 16-char/line
-            -- budget even at a 7-wide label.
-            Font.draw("- ONLINE -", 16, 8)
-            for i, v in ipairs(onlineByVersion) do
-              local label = v.game_version
-              label = label .. string.rep(" ", 7 - #label)
-              Font.draw((label .. " " .. v.count .. " ON"):sub(1, 16), 16, 40 + (i - 1) * 16)
+          elseif self.verPage <= 1 then
+            -- Two summary pages, split by generation (isGen2()) - used to
+            -- be one page listing every tracked version together, but a
+            -- 6th row (Crystal) landed right on top of the footer hint at
+            -- y=120, reported directly as "Crystal has now been pushed
+            -- down and is overlapping the mappings at the bottom." Rather
+            -- than shrinking rows to fit 6, this splits into a Gen 1 page
+            -- (RED/BLUE/YELLOW) and a Gen 2 page (GOLD/SILVER/CRYSTAL),
+            -- each with real clearance - 3 rows is exactly what this
+            -- screen already handled fine before Crystal existed.
+            --
+            -- TOTAL ONLINE is the SAME combined number on both pages
+            -- (every tracked version summed, not just the half being
+            -- shown) - directly requested ("This is total across all
+            -- games by the way, not just gen 1 or 2") so neither page
+            -- reads as if it were the whole total.
+            local isGen1Page = (self.verPage == 0)
+            local total = 0
+            local rows = {}
+            for _, v in ipairs(onlineByVersion) do
+              total = total + (tonumber(v.count) or 0)
+              if isGen2(v.game_version) ~= isGen1Page then
+                rows[#rows + 1] = v
+              end
             end
-            if #onlineByVersion > 0 then Font.draw("LR:VERSION", 16, 120) end
+            Font.draw(("TOTAL ONLINE: " .. total):sub(1, 16), 16, 8)
+            Font.draw(isGen1Page and "- GEN 1 -" or "- GEN 2 -", 16, 24)
+            for i, v in ipairs(rows) do
+              Font.draw((v.game_version .. ": " .. v.count):sub(1, 16), 16, 40 + (i - 1) * 16)
+            end
+            if #onlineByVersion > 0 then Font.draw("LR:PAGE", 16, 120) end
             Font.draw("B:BACK", 16, 128)
             return
           else
@@ -3681,7 +3702,7 @@ return function(mod)
             -- underlying question ("is this person already my friend")
             -- answered the same way, just scoped to a game version
             -- instead of a map.
-            local v = onlineByVersion[self.verPage]
+            local v = onlineByVersion[self.verPage - 1]
             local title = (v.game_version .. " ONLINE"):sub(1, 16)
             Font.draw(title, 16, 8)
             -- Checked against #v.players (the actual array length),
@@ -3737,8 +3758,8 @@ return function(mod)
               end
             end
           end
-          if onlineByVersion and self.verPage > 0 then
-            local v = onlineByVersion[self.verPage]
+          if onlineByVersion and self.verPage > 1 then
+            local v = onlineByVersion[self.verPage - 1]
             -- Both hints combined onto one line when there's more than
             -- one player to page between (LR for version, UD for
             -- player) - separate lines only when UD:PAGE wouldn't mean
@@ -4009,8 +4030,19 @@ return function(mod)
               -- while sortAsc is showing the reversed read order - so
               -- "#1" always means the actual top scorer, never "first
               -- one shown on this particular page flip."
+              -- Was "#<rank>  <index>/<n>" - two numbers that say almost
+              -- the same thing whenever sorted descending (rank and the
+              -- browsing position ARE the same number then), reported
+              -- directly as "just looks a bit untidy and repetitive." The
+              -- separate browsing position only ever differed from rank
+              -- while sorted ascending (see the comment above on why rank
+              -- has to be derived rather than just being self.index), and
+              -- that difference isn't something a player needs spelled
+              -- out as its own number - "#<rank> OF <n>" alone still
+              -- always reads as the real leaderboard position, in both
+              -- sort orders, with nothing repeated.
               local rank = self.sortAsc and (n - self.index + 1) or self.index
-              Font.draw(("#" .. rank .. "  " .. self.index .. "/" .. n):sub(1, 16), 16, 56)
+              Font.draw(("#" .. rank .. " OF " .. n):sub(1, 16), 16, 56)
               Font.draw((row.name or "?"):sub(1, 16), 16, 72)
               Font.draw("ID   " .. (row.trainer_id or "-----"), 16, 80)
               Font.draw(("CLEARS " .. tostring(row.total or 0)):sub(1, 16), 16, 88)
