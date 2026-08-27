@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.13.3)
+-- SilphNet - async presence + friends (v1.14.0)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -145,6 +145,14 @@ return function(mod)
   -- ---- state ------------------------------------------------------------
   local game
   local accountId, myName, myPass, myTrainerId
+  -- hasEmail: nil = not known yet (haven't heard back from a successful
+  -- login/login_token/register), true/false once known. Deliberately
+  -- starts nil rather than false so the SN RECOVER ACCT Start Menu row
+  -- (added below) stays hidden until the server has actually confirmed
+  -- there's no email on file, rather than flashing on for one frame for
+  -- every player (including ones who DO have an email set) before the
+  -- first auth response lands.
+  local hasEmail = nil
   local myMap, myX, myY, myFacing
   local inOverworld = false
   -- Populated for real at game.ready (see resolveGameVersion below) - was
@@ -879,9 +887,20 @@ return function(mod)
   local fireLeagueLeaderboardFetch   -- same forward-declare reasoning as the line above - see the comment there
   local fireFriendDetailFetch, fireStatsUpload, fireOnlineByVersionFetch
 
-  local function onAuthOk(accId, name, token, trainerId)
+  local function onAuthOk(accId, name, token, trainerId, hasEmailStr)
     accountId, myName = accId, name or myName
     if trainerId then myTrainerId = trainerId end
+    -- hasEmailStr arrives as the literal text "true"/"false" (jsonField
+    -- only understands quoted strings and bare numbers, not a real JSON
+    -- boolean literal - see login.php/login_token.php/register.php's own
+    -- comments on why has_email is sent as a quoted string rather than a
+    -- native bool), so this is a plain string comparison, same convention
+    -- other boolean-shaped fields already use elsewhere in this file
+    -- (e.g. is_you == "true" on the online-by-version player list).
+    -- Only overwritten when the field was actually present - never reset
+    -- to nil/unknown by a response that didn't include it at all.
+    if hasEmailStr == "true" then hasEmail = true
+    elseif hasEmailStr == "false" then hasEmail = false end
     authState, authBusy = "authed", false
     if token then pcall(function() mod.save:set("token", token) end) end
     mod.log:info("SilphNet: logged in as %s", tostring(myName))
@@ -898,7 +917,7 @@ return function(mod)
     if tag == "tok" then
       authBusy = false
       if status == "OK" and jsonIsOk(body) then
-        onAuthOk(jsonField(body, "account_id"), jsonField(body, "name"), nil, jsonField(body, "trainer_id"))
+        onAuthOk(jsonField(body, "account_id"), jsonField(body, "name"), nil, jsonField(body, "trainer_id"), jsonField(body, "has_email"))
       else
         -- Cached token no longer valid - fall through to a real login if
         -- we have a password, otherwise ask for credentials.
@@ -915,7 +934,7 @@ return function(mod)
     elseif tag == "login" then
       if status == "OK" and jsonIsOk(body) then
         authBusy = false
-        onAuthOk(jsonField(body, "account_id"), myName, jsonField(body, "token"), jsonField(body, "trainer_id"))
+        onAuthOk(jsonField(body, "account_id"), myName, jsonField(body, "token"), jsonField(body, "trainer_id"), jsonField(body, "has_email"))
       elseif status == "OK" then
         -- Valid HTTP response but ok:false - most likely "wrong name or
         -- password" for a name that doesn't exist yet. Rather than
@@ -934,7 +953,7 @@ return function(mod)
     elseif tag == "register" then
       authBusy = false
       if status == "OK" and jsonIsOk(body) then
-        onAuthOk(jsonField(body, "account_id"), myName, jsonField(body, "token"), jsonField(body, "trainer_id"))
+        onAuthOk(jsonField(body, "account_id"), myName, jsonField(body, "token"), jsonField(body, "trainer_id"), jsonField(body, "has_email"))
       else
         authState = "failed"
         mod.log:warn("SilphNet: register failed: %s", tostring(body))
@@ -3534,6 +3553,24 @@ return function(mod)
       -- bottom menu item").
       mod.ui.insertBefore(items, "QUIT", { label = "SN ONLINE",
         onSelect = function() mod.ui.push(g, "SilphNetOnline") end })
+      -- Only shown once the server has actually confirmed there's no
+      -- recovery email on file (hasEmail == false, not nil/unknown and
+      -- not true) - built directly for a real reported case: a player
+      -- locked out with no email set and no self-service way back in.
+      -- The mod itself still can't capture an email address at all (see
+      -- the naming-grid research this was weighed against - typeable in
+      -- principle once "@" is added to the grid, but that grid is a
+      -- fixed-size box with no room to spare, already stretched by the
+      -- digit row this mod adds for PASSWORD, and typing a full address
+      -- one D-pad click at a time is real friction even if it fit) - so
+      -- this row is a pointer to the website's account page, where typing
+      -- an email is trivial, rather than an attempt to capture one here.
+      -- Inserted before SN ABOUT (not after) so About stays the last row
+      -- either way, same ordering rule as every row above it.
+      if hasEmail == false then
+        mod.ui.insertBefore(items, "QUIT", { label = "SN RECOVER ACCT",
+          onSelect = function() mod.ui.push(g, "SilphNetRecoverAcct") end })
+      end
       mod.ui.insertBefore(items, "QUIT", { label = "SN ABOUT",
         onSelect = function() mod.ui.push(g, "SilphNetAbout") end })
     end)
@@ -3591,6 +3628,49 @@ return function(mod)
           Font.draw("THANKS FOR", 16, 112)
           Font.draw(("PLAYING! V" .. tostring(mod.version or "?")):sub(1, 16), 16, 120)
           Font.draw("B:BACK", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- Read-only instructions screen, pushed from the "SN RECOVER ACCT"
+  -- Start Menu row - only reachable at all while hasEmail == false (see
+  -- that row's own comment). Deliberately no in-game email entry here -
+  -- points to the website instead, where typing an email is trivial
+  -- rather than a fixed-size letter grid this project weighed and
+  -- decided against extending for this. No live data, no fetch, nothing
+  -- that can be "CHECKING..." - just static text, same simplicity as
+  -- SilphNetAbout right above this.
+  pcall(function()
+    mod.content.screens:register("SilphNetRecoverAcct", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          if g.input:wasPressed("b") or g.input:wasPressed("a") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("SN RECOVER ACCT", 16, 8)
+          Font.draw("NO RECOVERY", 16, 24)
+          Font.draw("EMAIL SET", 16, 32)
+          -- The real domain (silphnet.jamshark.co.uk, 23 chars) is too
+          -- long for even ONE line of this screen's 16-char/line budget
+          -- on its own, let alone with "https://" or "/account.php"
+          -- added - wrapped at the dot between "silphnet" and "jamshark"
+          -- rather than mid-word, the same way a real address would
+          -- naturally break in print. Both halves fit comfortably (9 and
+          -- 14 chars) with room to spare, unlike a mid-word split which
+          -- would have needed a hyphen or looked like a typo.
+          Font.draw("GO TO:", 16, 48)
+          Font.draw("SILPHNET.", 16, 56)
+          Font.draw("JAMSHARK.CO.UK", 16, 64)
+          Font.draw("MY ACCOUNT", 16, 72)
+          Font.draw("SO YOU CAN RESET", 16, 88)
+          Font.draw("YOUR PASSWORD IF", 16, 96)
+          Font.draw("YOU EVER FORGET", 16, 104)
+          Font.draw("A/B:CLOSE", 16, 128)
         end
         return self
       end,

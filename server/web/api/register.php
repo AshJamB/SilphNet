@@ -1,7 +1,14 @@
 <?php
 // SilphNet accounts - create a new account.
 // POST: name, password
-// Returns: {"ok":true,"account_id":"...","token":"...","trainer_id":"04815"}
+// Returns: {"ok":true,"account_id":"...","token":"...","trainer_id":"04815","has_email":"false"}
+//
+// has_email is always "false" here - a brand new account has no email on
+// file yet, by definition - included anyway (rather than leaving the mod
+// to assume that) so onAuthOk's handling is identical across all three
+// auth endpoints (login.php/login_token.php/register.php) with nothing
+// register-specific to remember. Quoted string, not a real JSON boolean -
+// see login.php's own comment on why.
 //
 // trainer_id is a random 5-digit id (00000-65535, same range as the real
 // games' 16-bit trainer ID), generated once here and unique across all
@@ -58,7 +65,7 @@ try {
     $pdo->prepare('INSERT INTO sessions (token, account_id, created_at, last_used) VALUES (:token, :id, NOW(), NOW())')
         ->execute([':token' => $token, ':id' => $accountId]);
 
-    silphnet_json(['ok' => true, 'account_id' => $accountId, 'token' => $token, 'trainer_id' => str_pad($trainerId, 5, '0', STR_PAD_LEFT)]);
+    silphnet_json(['ok' => true, 'account_id' => $accountId, 'token' => $token, 'trainer_id' => str_pad($trainerId, 5, '0', STR_PAD_LEFT), 'has_email' => 'false']);
 } catch (PDOException $e) {
     silphnet_error('db error', 500);
 }
