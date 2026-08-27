@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.13.1)
+-- SilphNet - async presence + friends (v1.13.2)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -4038,11 +4038,26 @@ return function(mod)
               -- while sorted ascending (see the comment above on why rank
               -- has to be derived rather than just being self.index), and
               -- that difference isn't something a player needs spelled
-              -- out as its own number - "#<rank> OF <n>" alone still
+              -- out as its own number - "<rank> OF <n>" alone still
               -- always reads as the real leaderboard position, in both
               -- sort orders, with nothing repeated.
+              --
+              -- NOT "#<rank>" - confirmed directly against the engine's
+              -- own src/render/Font.lua: "#" is not a real glyph in this
+              -- font at all, it's a deliberate macro (MACRO_TEXT) that
+              -- expands to the literal 4 characters "POKe" (with the
+              -- accent), mirroring the real cartridge's own charmap quirk
+              -- where the ROM's font has ONE character code for the whole
+              -- "POKe" string (as in "POKeMON"/"POKe BALL"). Reported
+              -- directly on-device as "POKe1   1/2" where "#1  1/2" was
+              -- expected - this port genuinely reproduces that Game Boy
+              -- font behaviour on purpose, it isn't a rendering bug in the
+              -- engine. First time this file ever put a literal "#" into
+              -- a drawn string rather than using it as Lua's length
+              -- operator in code - every other "#" in this file is that,
+              -- never text on screen.
               local rank = self.sortAsc and (n - self.index + 1) or self.index
-              Font.draw(("#" .. rank .. " OF " .. n):sub(1, 16), 16, 56)
+              Font.draw(("RANK " .. rank .. " OF " .. n):sub(1, 16), 16, 56)
               Font.draw((row.name or "?"):sub(1, 16), 16, 72)
               Font.draw("ID   " .. (row.trainer_id or "-----"), 16, 80)
               Font.draw(("CLEARS " .. tostring(row.total or 0)):sub(1, 16), 16, 88)
