@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.14.2)
+-- SilphNet - async presence + friends (v1.14.3)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -3523,6 +3523,33 @@ return function(mod)
   -- window) - this only fixes the client still SENDING that ping while
   -- idle, never touches what counts as stale on the server.
   mod.hooks:wrap("core.update", function(nextFn, g, dt)
+    -- Keep the module-level `game` reference genuinely live, every frame,
+    -- rather than trusting the one-time snapshot game.ready handed us at
+    -- boot. This is the REAL fix for a bug the map.entered re-check
+    -- (earlier this version) only partially addressed: on at least one
+    -- real device (Android), switching from one game to another doesn't
+    -- necessarily re-fire game.ready at all (the OS/engine can keep the
+    -- same process - and this mod's Lua state - running underneath what
+    -- looks to the player like a fresh launch), so `game` stayed frozen on
+    -- whatever was first loaded, and EVERY game.save read in this file
+    -- (money, badges, pokedex, hallOfFame, version - not just gameVersion)
+    -- was silently reading that stale save the whole time.
+    --
+    -- docs/modding.md confirms core.update's own `g` parameter is the
+    -- live, current game object, not a cached one - it's literally what
+    -- the engine's own love.update tick passes straight through
+    -- (`ModRuntime.call("core.update", function(g, d) g:update(d) end,
+    -- game, dt)` in src/core/PlatformHooks.lua) - so reassigning `game`
+    -- here, every frame, self-heals this and every other game.save read
+    -- the moment a switch happens, with no dependency on game.ready ever
+    -- firing again. gameVersion is re-resolved right alongside it for the
+    -- same reason (map.entered's own re-check from earlier this version
+    -- is harmless but redundant now - left in place rather than removed,
+    -- since it costs nothing and doesn't hurt to check twice).
+    if g then
+      game = g
+      gameVersion = resolveGameVersion()
+    end
     nextFn(g, dt)
     pcall(drainHttpResults)
     pcall(pumpPresenceTimer)
