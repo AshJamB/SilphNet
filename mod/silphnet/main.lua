@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.14.1)
+-- SilphNet - async presence + friends (v1.14.2)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -3410,6 +3410,21 @@ return function(mod)
     despawnLeagueSign()
     inOverworld = true
     myMap = ev.mapId
+    -- Re-check the game version on every real map transition, not just
+    -- once at game.ready. gameVersion used to be a one-shot read at boot
+    -- on the theory that a game never changes mid-session - reported
+    -- directly false: a real device (Android) can go from playing Blue to
+    -- playing Gold without game.ready ever firing again (the OS/launcher
+    -- keeping the engine process alive rather than doing a real fresh
+    -- restart, not something this mod can detect or force), leaving
+    -- gameVersion - and therefore every ping's game_version field - stuck
+    -- on whatever was first detected long after it stopped being true.
+    -- map.entered is confirmed to keep firing correctly across exactly
+    -- this scenario (myMap/myX/myY above were already proven correct for
+    -- the new game in the access-log evidence that caught the session-
+    -- token bug), so re-resolving here self-heals within one real step
+    -- even when game.ready itself never re-fires.
+    gameVersion = resolveGameVersion()
     local cur = mod.world:current()
     if cur then myX, myY, myFacing = cur.x, cur.y, cur.facing end
     refreshMarkers()
