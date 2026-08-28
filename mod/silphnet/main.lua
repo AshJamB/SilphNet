@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.14.4)
+-- SilphNet - async presence + friends (v1.14.5)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -1458,24 +1458,10 @@ return function(mod)
   local function firePresencePing()
     if authState ~= "authed" or not myMap then return end
     presenceBusy = true
-    -- TEMPORARY DIAGNOSTIC (remove once the stuck-game-version bug is
-    -- actually confirmed fixed): dbg_v reads game.save.version fresh,
-    -- inline, right here, completely independent of the gameVersion
-    -- variable core.update maintains - if a device reports gameVersion
-    -- wrong again despite that fix, comparing dbg_v against game_version
-    -- in the server's own access log tells us whether the live game
-    -- object itself genuinely still reads the wrong version at this exact
-    -- instant (an engine-side issue beyond this file), or whether
-    -- gameVersion itself has a second stale copy somewhere this file
-    -- hasn't caught yet (a real, findable bug in this file). ping.php
-    -- ignores unrecognized fields, so this is safe to leave attached to a
-    -- real request rather than needing a separate call.
-    local dbgOk, dbgV = pcall(function() return game and game.save and tostring(game.save.version) end)
     httpAsyncGet("ping", "/ping.php", {
       token = currentToken() or "",
       map_id = myMap, x = myX or 0, y = myY or 0,
       facing = myFacing or "down", game_version = gameVersion,
-      dbg_v = dbgOk and tostring(dbgV) or "ERR",
     })
   end
 

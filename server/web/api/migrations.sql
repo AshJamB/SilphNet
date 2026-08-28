@@ -255,3 +255,48 @@ ALTER TABLE accounts ADD COLUMN email VARBINARY(512) NULL AFTER trainer_id;
 -- exist for its OTHER fields to keep working.
 ALTER TABLE friend_stats ADD COLUMN badges_mask SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER badges;
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-08-28: presence's unique key widened to (account_id, game_version)
+-- Needed if your `presence` table predates the multi-version tracking
+-- feature (an install from before Gold/Silver/Yellow-alongside-Red/Blue
+-- support existed) - it would have been created with a unique key on
+-- account_id ALONE (one row per account, full stop), which schema.sql's
+-- CREATE TABLE IF NOT EXISTS never retroactively widens on an existing
+-- table. This migration was missed when the multi-version feature first
+-- shipped and went unnoticed for a long time, because the symptom is
+-- subtle: ping.php's INSERT ... ON DUPLICATE KEY UPDATE deliberately never
+-- rewrites game_version on a match (it assumes that column is already part
+-- of what identified the row) - so on an unwidened table, EVERY ping for
+-- any version collides with the same single existing row, silently
+-- refreshing its position/last_seen while game_version stays frozen
+-- forever on whichever version first created that row. Every ping still
+-- succeeds (200 OK) and carries the correct version - it just isn't
+-- allowed to land in its own row - so this can look exactly like a client
+-- detection bug (reported as "SN ONLINE shows me as my OLD game, not the
+-- one I'm actually playing") even though the client was correct the whole
+-- time. Confirmed directly on a real install via SHOW INDEX FROM presence
+-- rather than guessed, after three client-side fixes in a row failed to
+-- change the symptom - the real bug was never in main.lua.
+--
+-- If you're setting up SilphNet fresh, schema.sql already creates this key
+-- correctly (UNIQUE KEY uniq_account_version (account_id, game_version))
+-- and you can skip this whole block.
+-- ---------------------------------------------------------------------------
+
+-- Step 1: check which key you actually have - run this first.
+--
+--   SHOW INDEX FROM presence;
+--
+-- If you see a key (any name) covering ONLY account_id with nothing else
+-- under it, you need this migration. If you already see account_id AND
+-- game_version listed together under the same key name, skip this block -
+-- your table is already correct.
+
+-- Step 2: drop the too-narrow key and add the correct composite one. Safe
+-- to run live - this doesn't touch any existing data, only what future
+-- pings are allowed to do. Replace uniq_account below with whatever
+-- Key_name step 1 actually showed you, if it's different.
+ALTER TABLE presence DROP INDEX uniq_account;
+ALTER TABLE presence ADD UNIQUE KEY uniq_account_version (account_id, game_version);
+-- ---------------------------------------------------------------------------
