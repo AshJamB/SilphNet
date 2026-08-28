@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.14.0)
+-- SilphNet - async presence + friends (v1.14.1)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -168,6 +168,27 @@ return function(mod)
   -- authState: idle|logging_in|need_creds|failed|authed
   local authState = "idle"
   local authBusy  = false
+
+  -- In-memory copy of the active session token, kept ALONGSIDE mod.save's
+  -- copy rather than instead of it - mod.save:set("token", ...) is still
+  -- called on every successful login/register (see onAuthOk) so a real
+  -- session survives a full app relaunch, same as before. This local exists
+  -- purely as a same-run cache: confirmed via a live Gold/Crystal save
+  -- (real access-log evidence - every recurring ping/fetch after the very
+  -- first one came back with a literally EMPTY token, 401ing every single
+  -- time) that mod.save's write doesn't reliably survive being read back a
+  -- few seconds later on a Gen 2 save specifically, almost certainly tied
+  -- to Gen 2's slotted saves/<version>/<slot>.lua structure differing from
+  -- Gen 1's flat save_<version>.lua one (see readStatsSnapshot's own
+  -- Gen2-save-shape research elsewhere in this file) - NOT something this
+  -- mod can fix on the engine side. Every fire*Fetch call below now reads
+  -- sessionToken first and only falls back to mod.save:get("token") if this
+  -- is somehow nil (e.g. immediately after a fresh app launch, before
+  -- beginAuth's first read has run) - see currentToken().
+  local sessionToken = nil
+  local function currentToken()
+    return sessionToken or mod.save:get("token")
+  end
 
   -- Keyed by "account_id|game_version" (see parseFriendsJson), NOT bare
   -- account_id - one friend can have multiple entries here if they have
@@ -840,6 +861,7 @@ return function(mod)
     end
 
     local token = mod.save:get("token")
+    sessionToken = token   -- cache immediately - see currentToken()'s comment
     authBusy = true
     if token then
       authState = "logging_in"
@@ -902,7 +924,10 @@ return function(mod)
     if hasEmailStr == "true" then hasEmail = true
     elseif hasEmailStr == "false" then hasEmail = false end
     authState, authBusy = "authed", false
-    if token then pcall(function() mod.save:set("token", token) end) end
+    if token then
+      sessionToken = token   -- cache immediately - see currentToken()'s comment
+      pcall(function() mod.save:set("token", token) end)
+    end
     mod.log:info("SilphNet: logged in as %s", tostring(myName))
     -- Fire both fetches immediately on login rather than waiting for the
     -- next 30s pump tick - previously a freshly-logged-in player could see
@@ -921,6 +946,7 @@ return function(mod)
       else
         -- Cached token no longer valid - fall through to a real login if
         -- we have a password, otherwise ask for credentials.
+        sessionToken = nil
         pcall(function() mod.save:set("token", nil) end)
         if myPass and myPass ~= "" then
           authBusy = true
@@ -1433,7 +1459,7 @@ return function(mod)
     if authState ~= "authed" or not myMap then return end
     presenceBusy = true
     httpAsyncGet("ping", "/ping.php", {
-      token = mod.save:get("token") or "",
+      token = currentToken() or "",
       map_id = myMap, x = myX or 0, y = myY or 0,
       facing = myFacing or "down", game_version = gameVersion,
     })
@@ -1442,19 +1468,19 @@ return function(mod)
   fireFriendsFetch = function()
     if authState ~= "authed" then return end
     friendsBusy = true
-    httpAsyncGet("friends", "/friends.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("friends", "/friends.php", { token = currentToken() or "" })
   end
 
   firePendingFetch = function()
     if authState ~= "authed" then return end
     pendingBusy = true
-    httpAsyncGet("pending", "/pending_requests.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("pending", "/pending_requests.php", { token = currentToken() or "" })
   end
 
   fireOnlineCountFetch = function()
     if authState ~= "authed" then return end
     onlineCountBusy = true
-    httpAsyncGet("online_count", "/online_count.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("online_count", "/online_count.php", { token = currentToken() or "" })
   end
 
   -- Only meaningful in the overworld with a known map - same guard
@@ -1463,7 +1489,7 @@ return function(mod)
   fireNearbyFetch = function()
     if authState ~= "authed" or not myMap then return end
     nearbyBusy = true
-    httpAsyncGet("nearby", "/nearby.php", { token = mod.save:get("token") or "", map_id = myMap })
+    httpAsyncGet("nearby", "/nearby.php", { token = currentToken() or "", map_id = myMap })
   end
 
   -- On-demand only - fired once when SilphNetOnline opens, NOT on the 30s
@@ -1477,7 +1503,7 @@ return function(mod)
   fireOnlineByVersionFetch = function()
     if authState ~= "authed" then return end
     onlineByVersionBusy = true
-    httpAsyncGet("online_by_version", "/online_by_version.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("online_by_version", "/online_by_version.php", { token = currentToken() or "" })
   end
 
   -- On-demand only, same reasoning as fireOnlineByVersionFetch/
@@ -1493,7 +1519,7 @@ return function(mod)
   fireLeagueLeaderboardFetch = function()
     if authState ~= "authed" then return end
     leagueLeaderboardBusy = true
-    httpAsyncGet("league_leaderboard", "/league_leaderboard.php", { token = mod.save:get("token") or "" })
+    httpAsyncGet("league_leaderboard", "/league_leaderboard.php", { token = currentToken() or "" })
   end
 
   -- On-demand only - fired once when SilphNetFriendDetail opens, NOT on
@@ -1508,7 +1534,7 @@ return function(mod)
     if authState ~= "authed" or not accountId then return end
     friendDetailBusy = true
     httpAsyncGet("friend_detail", "/friend_detail.php", {
-      token = mod.save:get("token") or "", account_id = accountId,
+      token = currentToken() or "", account_id = accountId,
     })
   end
 
@@ -1521,7 +1547,7 @@ return function(mod)
   -- happen at the same moment.
   fireStatsUpload = function(statsFields, activity)
     if authState ~= "authed" then return end
-    local fields = { token = mod.save:get("token") or "", game_version = gameVersion }
+    local fields = { token = currentToken() or "", game_version = gameVersion }
     if statsFields then
       fields.badges = statsFields.badges
       fields.badges_mask = statsFields.badgesMask
@@ -1551,7 +1577,7 @@ return function(mod)
 
   local function fireAddFriend(trainerId)
     addFriendStatus = "SENDING..."
-    httpAsyncGet("add_friend", "/add_friend.php", { token = mod.save:get("token") or "", trainer_id = trainerId })
+    httpAsyncGet("add_friend", "/add_friend.php", { token = currentToken() or "", trainer_id = trainerId })
   end
 
   -- accountId here is the OTHER person's account_id (see friends.php's
@@ -1559,7 +1585,7 @@ return function(mod)
   -- directions of an accepted friendship in one transaction, same
   -- reasoning as accept_friend.php inserting both directions on accept.
   local function fireRemoveFriend(accountId)
-    httpAsyncGet("remove_friend", "/remove_friend.php", { token = mod.save:get("token") or "", account_id = accountId })
+    httpAsyncGet("remove_friend", "/remove_friend.php", { token = currentToken() or "", account_id = accountId })
   end
 
   -- ---- friend silhouettes (static, one placement per poll, never tweened) -
@@ -2002,6 +2028,7 @@ return function(mod)
   end
 
   local function performReset()
+    sessionToken = nil
     pcall(function() mod.save:set("token", nil) end)
     mod.log:info("SilphNet: reset confirmed - cleared cached login")
     authState, authBusy = "need_creds", false
@@ -3045,7 +3072,7 @@ return function(mod)
             local req = pendingRequests[self.page]
             if req and req.name then
               httpAsyncGet("accept_friend", "/accept_friend.php",
-                { token = mod.save:get("token") or "", requester_name = req.name })
+                { token = currentToken() or "", requester_name = req.name })
             end
             if self.page > 1 then self.page = self.page - 1 end
           end
@@ -3371,6 +3398,7 @@ return function(mod)
   mod.events:on("mod.options_changed", function(ev)
     local k = ev and ev.key
     if k == "name" or k == "password" then
+      sessionToken = nil
       pcall(function() mod.save:set("token", nil) end)   -- credentials changed - stop trusting the old session
       beginAuth()
     end
