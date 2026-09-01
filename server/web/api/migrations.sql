@@ -322,3 +322,16 @@ ALTER TABLE presence ADD UNIQUE KEY uniq_account_version (account_id, game_versi
 -- fields to keep working.
 ALTER TABLE friend_stats ADD COLUMN tiles_walked INT UNSIGNED NOT NULL DEFAULT 0 AFTER party;
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-09-01: bug_reports (new table, not a column migration) - just re-run
+-- schema.sql, its CREATE TABLE IF NOT EXISTS will add this table without
+-- touching anything you already have. Nothing to ALTER here - listed in
+-- this file only so it's not missed by anyone skimming straight to
+-- migrations.sql for "what do I need to run for this version." Backs the
+-- website's new "Report a bug" form (report_bug.php) - a bare per-IP
+-- rate-limit ledger, nothing else. Also needs GITHUB_BUG_REPORT_TOKEN and
+-- GITHUB_BUG_REPORT_REPO set in db.php (see db.php.example) before the
+-- form will actually create anything - it fails soft with a clear error
+-- until then, same as the recovery-email feature does.
+-- ---------------------------------------------------------------------------

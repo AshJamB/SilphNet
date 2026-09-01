@@ -203,3 +203,22 @@ CREATE TABLE IF NOT EXISTS account_history (
   changed_at  DATETIME NOT NULL,
   INDEX idx_account (account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Bare rate-limit ledger for report_bug.php's public, unauthenticated
+-- "Report a bug" form (website footer) - one row per successfully
+-- accepted report. ip_hash is SHA-256 of the submitter's IP, never the
+-- raw IP itself - this table only ever needs to answer "has this IP
+-- submitted recently", not "who exactly is this", so there's no reason
+-- to keep anything more identifying than that around. No account_id at
+-- all - the form is deliberately open to anyone, logged in or not (see
+-- report_bug.php's own comment for why: requiring a SilphNet login would
+-- block someone reporting a bug from a browser with no game/account
+-- context at all). Rows are never deleted automatically - it's small
+-- (one row per accepted report, not per attempt) and self-limiting in
+-- practice; prune manually in phpMyAdmin if it ever actually grows large.
+CREATE TABLE IF NOT EXISTS bug_reports (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  ip_hash     VARCHAR(64) NOT NULL,
+  created_at  DATETIME NOT NULL,
+  INDEX idx_ip_created (ip_hash, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

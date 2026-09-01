@@ -115,9 +115,11 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
   .tagline { color: var(--text-dim); font-size: 1.1rem; max-width: 640px; margin: 0 auto; }
   .cta-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin: 28px 0; }
   .btn {
-    display: inline-block; padding: 12px 22px; border-radius: 8px; text-decoration: none;
-    font-weight: 600; font-size: 0.95rem; border: 2px solid transparent;
+    display: inline-flex; align-items: center; gap: 8px; padding: 12px 22px; border-radius: 8px;
+    text-decoration: none; font-weight: 600; font-size: 0.95rem; border: 2px solid transparent;
+    cursor: pointer; font-family: inherit;
   }
+  .btn-icon { width: 16px; height: 16px; flex-shrink: 0; }
   .btn-primary { background: var(--orange); color: #1a1200; }
   .btn-primary:hover { background: var(--orange-dark); }
   .btn-secondary { background: transparent; color: var(--text); border-color: var(--panel-border); }
@@ -272,6 +274,12 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
     background: transparent; color: var(--text); cursor: pointer; font-size: 0.9rem;
   }
   .modal-close:hover { border-color: var(--blue); color: var(--blue); }
+  .bug-field {
+    width: 100%; padding: 9px 11px; margin-bottom: 12px; border-radius: 8px;
+    border: 1px solid var(--panel-border); background: #1c2230; color: var(--text);
+    font-size: 0.92rem; font-family: inherit; box-sizing: border-box; resize: vertical;
+  }
+  .bug-field:focus { outline: none; border-color: var(--blue); }
 
   /* Community stats ticker - a single line that fades between a handful of
      server-wide totals on a slow interval, fetched once on load. A JS
@@ -375,10 +383,32 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
         </svg>
         <span class="stat-pill-text">&hellip;</span>
       </button>
+      <button type="button" class="stat-pill is-loading" id="statPillTiles" aria-haspopup="dialog" data-stat="tiles_walked">
+        <svg class="stat-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <ellipse cx="5.2" cy="4.5" rx="2" ry="3" transform="rotate(-15 5.2 4.5)" stroke="currentColor" stroke-width="1.3"/>
+          <ellipse cx="10.8" cy="11.5" rx="2" ry="3" transform="rotate(15 10.8 11.5)" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+        <span class="stat-pill-text">&hellip;</span>
+      </button>
     </div>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/AshJamB/SilphNet" target="_blank" rel="noopener">Get SilphNet</a>
-      <a class="btn btn-secondary" href="account.php">Manage my account</a>
+      <a class="btn btn-secondary" href="account.php">Manage My Account</a>
+    </div>
+    <div class="cta-row">
+      <button type="button" class="btn btn-secondary" id="reportBugOpen">
+        <svg class="btn-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="5.5" y="5" width="5" height="7" rx="2.5" stroke="currentColor" stroke-width="1.2"/>
+          <line x1="8" y1="2" x2="8" y2="5" stroke="currentColor" stroke-width="1.2"/>
+          <line x1="5.5" y1="6.5" x2="2.5" y2="4.5" stroke="currentColor" stroke-width="1.1"/>
+          <line x1="10.5" y1="6.5" x2="13.5" y2="4.5" stroke="currentColor" stroke-width="1.1"/>
+          <line x1="5" y1="8.5" x2="2" y2="8.5" stroke="currentColor" stroke-width="1.1"/>
+          <line x1="11" y1="8.5" x2="14" y2="8.5" stroke="currentColor" stroke-width="1.1"/>
+          <line x1="5.5" y1="10.5" x2="2.5" y2="12.5" stroke="currentColor" stroke-width="1.1"/>
+          <line x1="10.5" y1="10.5" x2="13.5" y2="12.5" stroke="currentColor" stroke-width="1.1"/>
+        </svg>
+        Report a bug
+      </button>
     </div>
   </header>
 
@@ -494,6 +524,29 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
     Entirely optional, and much appreciated.
   </footer>
 
+</div>
+
+<!-- Report-a-bug modal - shares the same .modal-overlay/.modal-box/
+     .modal-close CSS every other modal on this page uses. website is a
+     honeypot field: real visitors never see it (position:absolute,
+     off-screen, aria-hidden, tabindex=-1 below), but a simple bot that
+     fills in every field in a form finds it anyway - report_bug.php
+     silently discards anything submitted with it non-empty. -->
+<div class="modal-overlay" id="bugReportModal" role="dialog" aria-modal="true" aria-labelledby="bugReportTitle">
+  <div class="modal-box">
+    <h3 id="bugReportTitle">Report a bug</h3>
+    <p class="modal-sub">This becomes an issue on the SilphNet GitHub repo.</p>
+    <form id="bugReportForm">
+      <label for="bugTitle" style="display: block; font-size: 0.82rem; color: var(--text-dim); margin-bottom: 4px;">What went wrong</label>
+      <input type="text" id="bugTitle" name="title" maxlength="100" class="bug-field" placeholder="e.g. Friend marker doesn't disappear" required>
+      <label for="bugDescription" style="display: block; font-size: 0.82rem; color: var(--text-dim); margin-bottom: 4px;">Details - what happened, what you expected instead</label>
+      <textarea id="bugDescription" name="description" maxlength="2000" rows="4" class="bug-field" required></textarea>
+      <input type="text" id="bugWebsite" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0;">
+      <p class="modal-empty" id="bugReportStatus" style="display: none;"></p>
+      <button type="submit" class="modal-close" id="bugReportSubmit" style="margin-top: 6px; border-color: var(--blue); color: var(--blue);">Submit report</button>
+    </form>
+    <button type="button" class="modal-close" id="bugReportClose">Close</button>
+  </div>
 </div>
 
 <div class="modal-overlay" id="onlineModal" role="dialog" aria-modal="true" aria-labelledby="onlineModalTitle">
@@ -867,6 +920,7 @@ const STAT_META = {
   pokedex_caught: { pillId: 'statPillCaught', label: 'Pokemon Caught', modalTitle: 'Pokemon Caught by Version', lbKey: 'pokedex' },
   badges: { pillId: 'statPillBadges', label: 'Gym Badges Earned', modalTitle: 'Gym Badges Earned by Version', lbKey: 'badges' },
   league_wins: { pillId: 'statPillLeague', label: 'League Victories', modalTitle: 'League Victories by Version', lbKey: 'league' },
+  tiles_walked: { pillId: 'statPillTiles', label: 'Tiles Walked', modalTitle: 'Tiles Walked by Version', lbKey: 'tiles' },
 };
 const STAT_MODAL_TOP_N = 10;
 let communityStatsData = null; // cached community-stats response, reused by every stat pill's modal
@@ -1033,6 +1087,63 @@ statModal.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') statModal.classList.remove('open');
+});
+
+// Report-a-bug modal - a plain POST to report_bug.php (see that file for
+// the honeypot/rate-limit design). Disables the submit button while the
+// request is in flight so a slow connection can't be double-submitted by
+// an impatient click, and shows an inline status line for both the error
+// and success case rather than an alert() - consistent with how every
+// other failure on this page degrades (a text message in place, not a
+// popup).
+const BUG_REPORT_API = '/api/report_bug.php';
+const bugReportModal = document.getElementById('bugReportModal');
+const bugReportForm = document.getElementById('bugReportForm');
+const bugReportStatus = document.getElementById('bugReportStatus');
+const bugReportSubmit = document.getElementById('bugReportSubmit');
+
+function openBugReportModal() {
+  bugReportStatus.style.display = 'none';
+  bugReportModal.classList.add('open');
+}
+document.getElementById('reportBugOpen').addEventListener('click', openBugReportModal);
+document.getElementById('bugReportClose').addEventListener('click', () => {
+  bugReportModal.classList.remove('open');
+});
+bugReportModal.addEventListener('click', (e) => {
+  if (e.target === bugReportModal) bugReportModal.classList.remove('open');
+});
+
+bugReportForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = document.getElementById('bugTitle').value.trim();
+  const description = document.getElementById('bugDescription').value.trim();
+  bugReportStatus.style.display = '';
+  bugReportStatus.style.color = '';
+  if (!title || !description) {
+    bugReportStatus.textContent = 'Please fill in both what went wrong and the details.';
+    return;
+  }
+
+  bugReportSubmit.disabled = true;
+  bugReportSubmit.textContent = 'Submitting…';
+  bugReportStatus.textContent = '';
+  try {
+    const res = await fetch(BUG_REPORT_API, { method: 'POST', body: new FormData(bugReportForm) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'unknown error');
+    bugReportStatus.textContent = 'Thanks - your report was filed. Closing…';
+    setTimeout(() => {
+      bugReportModal.classList.remove('open');
+      bugReportForm.reset();
+      bugReportStatus.style.display = 'none';
+    }, 1500);
+  } catch (err) {
+    bugReportStatus.textContent = err.message || 'Could not submit that. Please try again in a minute.';
+  } finally {
+    bugReportSubmit.disabled = false;
+    bugReportSubmit.textContent = 'Submit report';
+  }
 });
 
 fetchCommunityStats();

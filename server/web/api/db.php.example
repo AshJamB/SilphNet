@@ -68,6 +68,22 @@ define('SMTP_FROM_NAME', 'SilphNet');
 // -----------------------------------------------------------------------
 define('ADMIN_KEY', 'CHANGE-ME');   // << EDIT ME - set on the server only, never in git
 
+// -----------------------------------------------------------------------
+// "Report a bug" website form (report_bug.php) - optional, fails soft
+// like the recovery-email block above: leaving GITHUB_BUG_REPORT_TOKEN as
+// CHANGE-ME just makes the form return a clear "not configured yet"
+// error rather than doing anything unsafe. AshJamB/SilphNet is a PRIVATE
+// repo, so this needs a real GitHub token to create issues in it - a
+// fine-grained personal access token (https://github.com/settings/tokens),
+// scoped to ONLY this one repository, with Issues: Read and write and
+// nothing else. Never use a classic token with the full "repo" scope for
+// this - a fine-grained token scoped to one repo and one permission is
+// the least amount of access that can still do the job, so a leak of
+// this specific secret can't reach anything else in your GitHub account.
+// -----------------------------------------------------------------------
+define('GITHUB_BUG_REPORT_TOKEN', 'CHANGE-ME');   // << EDIT ME - set on the server only, never in git
+define('GITHUB_BUG_REPORT_REPO', 'AshJamB/SilphNet');
+
 function silphnet_db() {
     static $pdo = null;
     if ($pdo === null) {

@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.15.2)
+-- SilphNet - async presence + friends (v1.16.1)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -3973,6 +3973,7 @@ return function(mod)
         local function items()
           local list = {}
           list[#list + 1] = { label = "MILESTONES", screen = "SilphNetMilestones" }
+          list[#list + 1] = { label = "REPORT BUG", screen = "SilphNetReportBug" }
           list[#list + 1] = { label = "ABOUT", screen = "SilphNetAbout" }
           return list
         end
@@ -4087,6 +4088,38 @@ return function(mod)
           Font.draw("SO YOU CAN RESET", 16, 88)
           Font.draw("YOUR PASSWORD IF", 16, 96)
           Font.draw("YOU EVER FORGET", 16, 104)
+          Font.draw("A/B:CLOSE", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- SN MORE > REPORT BUG - pointed at the website, exactly like RECOVER
+  -- ACCT right above this, for the same reason: this project's standing
+  -- "no free-text in-game" rule means there's no in-game text box a bug
+  -- description could actually be typed into, so the real report form
+  -- lives on the website instead (see report_bug.php) and this screen is
+  -- just a signpost to it. No live data, no fetch - static text only.
+  pcall(function()
+    mod.content.screens:register("SilphNetReportBug", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          if g.input:wasPressed("b") or g.input:wasPressed("a") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("SN REPORT BUG", 16, 8)
+          Font.draw("FOUND A BUG?", 16, 24)
+          Font.draw("GO TO:", 16, 40)
+          Font.draw("SILPHNET.", 16, 48)
+          Font.draw("JAMSHARK.CO.UK", 16, 56)
+          Font.draw("AND CLICK", 16, 72)
+          Font.draw("REPORT A BUG", 16, 80)
+          Font.draw("NEAR THE TOP", 16, 88)
+          Font.draw("OF THE PAGE", 16, 96)
           Font.draw("A/B:CLOSE", 16, 128)
         end
         return self

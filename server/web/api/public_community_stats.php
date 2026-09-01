@@ -18,6 +18,11 @@
 // UNION-style query per species per game, not a plain SUM, and isn't what
 // this ticker is asking).
 //
+// `versions` also breaks tiles_walked down the same way, alongside the
+// other four - added for the homepage's Tiles Walked stat pill, same
+// per-version drilldown treatment as the rest (public_stat_by_version.php
+// now accepts "tiles_walked" as a stat key too).
+//
 // `versions` breaks those same four totals down per tracked game version,
 // for the homepage's per-stat drilldown modals (Pokemon Seen/Caught,
 // Badges, League Victories - same "click to see it split by version" shape
@@ -86,7 +91,8 @@ try {
             SUM(pokedex_seen) AS pokedex_seen_total,
             SUM(pokedex_caught) AS pokedex_caught_total,
             SUM(badges) AS badges_total,
-            SUM(league_wins) AS league_wins_total
+            SUM(league_wins) AS league_wins_total,
+            SUM(tiles_walked) AS tiles_walked_total
          FROM friend_stats
          WHERE game_version IN (' . implode(',', array_fill(0, count(SILPHNET_PUBLIC_TRACKED_VERSIONS), '?')) . ')
          GROUP BY game_version'
@@ -96,7 +102,7 @@ try {
 
     $versionTotals = [];
     foreach (SILPHNET_PUBLIC_TRACKED_VERSIONS as $v) {
-        $versionTotals[$v] = ['pokedex_seen' => 0, 'pokedex_caught' => 0, 'badges' => 0, 'league_wins' => 0];
+        $versionTotals[$v] = ['pokedex_seen' => 0, 'pokedex_caught' => 0, 'badges' => 0, 'league_wins' => 0, 'tiles_walked' => 0];
     }
     foreach ($versionRows as $r) {
         $versionTotals[$r['game_version']] = [
@@ -104,6 +110,7 @@ try {
             'pokedex_caught' => (int)($r['pokedex_caught_total'] ?? 0),
             'badges' => (int)($r['badges_total'] ?? 0),
             'league_wins' => (int)($r['league_wins_total'] ?? 0),
+            'tiles_walked' => (int)($r['tiles_walked_total'] ?? 0),
         ];
     }
 

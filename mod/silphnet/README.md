@@ -34,8 +34,10 @@ it — **SN NEARBY** (everyone else on your current map) and **SN ONLINE**
 RECOVER ACCT**, which only appears when this account has no recovery
 email on file and disappears on its own once one's set (kept top-level
 rather than tucked into a submenu, since it's rare but time-critical). A
-final **SN MORE** row opens a small submenu for the two rows that are
-always visible once logged in: **MILESTONES** and **ABOUT**.
+final **SN MORE** row opens a small submenu for the rows that are
+always visible once logged in: **MILESTONES**, **REPORT BUG** (points
+to the "Report a bug" button on the website's homepage — no in-game
+text entry, see below), and **ABOUT**.
 
 ## Notes
 
@@ -69,3 +71,8 @@ always visible once logged in: **MILESTONES** and **ABOUT**.
   the engine's mod API).
 - SN MILESTONES tracks five small, personal (not server-ranked) social
   firsts — see the Start Menu walkthrough above.
+- SN REPORT BUG (inside SN MORE) points to the "Report a bug" button on
+  the website's homepage rather than adding an in-game text box — the
+  form files a real issue on the GitHub repo directly, asks for no name
+  or email, and is guarded by a honeypot field plus a per-IP rate limit
+  rather than requiring a SilphNet login.

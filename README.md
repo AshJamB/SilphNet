@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.15.1 - Every gym (Gen1 Kanto, Gen2 Johto, Gen2 Kanto) now has its own sign listing which of your accepted friends already hold that badge. A second sign near the Elite Four entrance, "SN RECORDS", cycles through THREE ranked categories on one sign (A to switch) - total league clears, Pokedex completion (best single save), and tiles walked - each with ALL PLAYERS / FRIENDS pages and an ascending/descending toggle. Both signs are placed at runtime with no hardcoded coordinates, and both show server-computed names/numbers only - no free text. Friend activity now also reports earning a badge, leveling up, and winning the league, not just catching a Pokemon. SN MILESTONES tracks five small personal-first social milestones (first friend, 5 friends, a crowded server, a friend nearby, 1000 tiles walked). Gen 2 (Gold, Silver, and Crystal) is fully supported alongside Red/Blue/Yellow. The Start Menu stays to five SilphNet rows - low-frequency ones (About, Milestones, and the account-recovery row that only appears when needed) are folded into one "SN MORE" submenu rather than each getting their own row. HTTP requests are async via the engine's `mod.fetch` API, falling back to synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
+**Status: v1.16.1 - Every gym (Gen1 Kanto, Gen2 Johto, Gen2 Kanto) now has its own sign listing which of your accepted friends already hold that badge. A second sign near the Elite Four entrance, "SN RECORDS", cycles through THREE ranked categories on one sign (A to switch) - total league clears, Pokedex completion (best single save), and tiles walked - each with ALL PLAYERS / FRIENDS pages and an ascending/descending toggle. Both signs are placed at runtime with no hardcoded coordinates, and both show server-computed names/numbers only - no free text. Friend activity now also reports earning a badge, leveling up, and winning the league, not just catching a Pokemon. SN MILESTONES tracks five small personal-first social milestones (first friend, 5 friends, a crowded server, a friend nearby, 1000 tiles walked). Gen 2 (Gold, Silver, and Crystal) is fully supported alongside Red/Blue/Yellow. The Start Menu stays lean - Milestones and About are folded into one "SN MORE" submenu, which also gained a REPORT BUG row pointing to the website's new bug-report form (files a real GitHub issue); SN RECOVER ACCT stays its own top-level row since it's conditional and self-removing. HTTP requests are async via the engine's `mod.fetch` API, falling back to synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
@@ -103,6 +103,7 @@ server/
       public_online_status.php    PUBLIC, unauthenticated - online-now count and per-version breakdown for the website
       public_online_players.php   PUBLIC, unauthenticated - who's online right now, for the website
       public_stat_by_version.php  PUBLIC, unauthenticated - one stat's per-player ranking within a single game version, for the website's drilldown modal
+      report_bug.php              PUBLIC, unauthenticated - the website's "Report a bug" form; files a real GitHub issue on the private repo (honeypot + per-IP rate limit, no login required)
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
 assets/                  images used in this README (banner, etc.)
@@ -227,6 +228,13 @@ clutter once logged in (unlike Recover Acct above):
   social milestones: FIRST FRIEND, 5 FRIENDS, CROWDED (10+ people online
   at once), FRIEND NEARBY, and 1000 TILES. Each is a one-way flag, same
   "only ever earned, never revoked" spirit as the league-clears tracking.
+- **REPORT BUG** - points to the "Report a bug" button on the website's
+  homepage (silphnet.jamshark.co.uk, next to Get SilphNet/Manage My
+  Account) rather than adding any in-game text entry - this project's
+  no-free-text-in-game rule means there's nowhere to actually type a
+  description in the mod itself. The website form files a real issue on
+  the GitHub repo directly, and deliberately asks for no name or email -
+  nothing to expose, since there's no follow-up process that would use it.
 - **ABOUT** - credits and a link to [ash.jamtv.co.uk](https://ash.jamtv.co.uk).
 
 - **RIGHT** (from the main **SN \<name\>** row) - open Add Friend (enter a
@@ -483,6 +491,7 @@ at it.
 11. Done - friend detail screen (press A on a friend in the friends list): self-reported stats (badges, Pokédex seen/caught, League wins, money) plus latest activity - currently catches only, shown on two lines ("CAUGHT LVL 25" / "BLASTOISE") - with its own time-ago, and last-seen repeated from the main friends list
 12. Done (partial) - auto status updates: catching a Pokemon is driven by the real `pokemon.caught` event (not a poll), including level from the event's own payload, uploaded immediately independent of the slower ~3 min stats cycle. Earning a badge, leveling up, and winning the League are now also reported - detected by polling/diffing each ~3 min stats snapshot against the previous one rather than an event, deliberately: there's no event at all for a badge being earned, and while `pokemon.level_up` is real, it's undocumented/unstable, so both got the same safe polling treatment as League wins (see the "Friend detail screen" section above for the full reasoning). Trainer-battle events ("DFTD BUG CATCHER" etc.) are NOT wired up - see the corrected note on item 12 below, this was originally overstated as straightforwardly buildable and isn't.
 16. Done - SN RECORDS: the league-clears sign near the Elite Four entrance now cycles (via **A**) through two more categories on the same sign - Pokedex completion (best single save, not summed across saves) and tiles walked (in-game steps, tracked via the real `world.stepped` event - deliberately NOT the engine's separate real-world-pedometer bridge, which is mobile-only and would exclude every desktop player). Folded onto the one existing sign rather than adding two more NPCs, to avoid multiplying the sign-placement risk documented under item 14 above. Also done: SN MILESTONES (five small, personal, not server-ranked social milestones - see the Start Menu walkthrough above for the list), and the Start Menu decluttering itself (SN MILESTONES and SN ABOUT folded into one "SN MORE" submenu; SN RECOVER ACCT deliberately stayed its own top-level conditional/self-removing row rather than moving in too - see the Start Menu walkthrough above).
+17. Done - SN REPORT BUG: a row inside SN MORE points to a new "Report a bug" button on the website's homepage (styled like Get SilphNet/Manage My Account, with a bug icon), which files a real issue directly on the private AshJamB/SilphNet GitHub repo (a fine-grained, single-repo GitHub token, server-side only - see `db.php.example`). Open to anyone, no SilphNet login required, guarded instead by a honeypot field plus a per-IP rate limit (`report_bug.php`, `bug_reports` table). Deliberately takes no name/email field at all - an early build briefly had an optional contact field, corrected after a real email address ended up visible on a GitHub issue during testing with no actual follow-up process to justify the exposure. The website's stat-pill row also gained a fifth pill, Tiles Walked, matching the other four.
 13. Done - real game version detection: `game.save.version` (confirmed directly from the engine's own `SaveData.lua`) replaces the permanent "UNKNOWN" placeholder that had sat unverified for most of this project. A friend who's genuinely played more than one version (e.g. cleared a BLUE run, then started a fresh YELLOW one) shows a version tag on the friends list ("1/3 (BLUE)") and can be viewed per-version on the friend detail screen (**SELECT** cycles versions there) - both only appear once a friend actually has more than one to disambiguate.
 14. Done - friends-who-cleared-this-gym sign (see item 11 below for the original planning note): a genuinely separate sign/NPC, not a rewrite of any vanilla statue's frozen per-map text, placed in every gym across all three supported runs (Gen1 Kanto, Gen2 Johto, Gen2 Kanto). Lists which of your accepted friends already hold that specific gym's badge, via a new per-account `badges_mask` bit (one bit per real badge id, uploaded alongside the existing stats snapshot). Solves the placement problem the original note worried about (checking every gym's layout map-by-map) without needing to: placement is discovered live at runtime via `mod.world:mapOverview()`'s read-only collision snapshot, searching a small plus/3x3 neighbourhood around wherever YOU yourself just walked in (`mod.world:current()`) for the first walkable, non-warp, unoccupied tile - guaranteed safe by construction, since a neighbour of a tile you just stood on is necessarily reachable ground, with zero hardcoded coordinates (this project ships no ROM data).
 15. Done - league leaderboard sign, the "first-to-clear-the-league" idea from item 14 below, generalized to a full ranked list rather than just first place: a new sign near the Elite Four entrance (`INDIGO_PLATEAU_LOBBY`) shows total league clears (`SUM(league_wins)` across every game_version an account has played, one combined number per person) with two pages (ALL PLAYERS top 50 / FRIENDS-only) and a descending/ascending toggle. Server-computed names/Trainer IDs/numbers only, same no-free-text policy as everything else in this mod.
@@ -669,7 +678,7 @@ and no persistent process required, ordinary shared web hosting is enough:
 1. In phpMyAdmin, run `server/web/api/schema.sql` against the database to
    create all the tables (`accounts`, `sessions`, `presence`, `friends`,
    `friend_stats`, `friend_activity`, `account_history`,
-   `password_resets`).
+   `password_resets`, `bug_reports`).
 2. Upload `server/web/index.php`, `account.php`, and the `assets/` folder
    to the site root - `index.php` becomes the site's homepage
    automatically on most hosts; `account.php` is reachable at
@@ -677,9 +686,11 @@ and no persistent process required, ordinary shared web hosting is enough:
 3. Upload everything in `server/web/api/` to an `api/` subfolder at the
    site root, except `db.php.example` - copy that one to `db.php` first
    and fill in the real database credentials (and, optionally,
-   `EMAIL_ENCRYPTION_KEY`/`SMTP_*` for the recovery-email feature - see
-   the comments in `db.php.example`) before uploading it. `account.php`'s
-   own `API_BASE` already points at `/api` to match.
+   `EMAIL_ENCRYPTION_KEY`/`SMTP_*` for the recovery-email feature, and
+   `GITHUB_BUG_REPORT_TOKEN` for the website's "Report a bug" form to
+   actually file GitHub issues - see the comments in `db.php.example`
+   for both) before uploading it. `account.php`'s own `API_BASE` already
+   points at `/api` to match.
 4. In `mod/silphnet/main.lua`, change `API_BASE` at the top to point at
    the new site's `/api` URL, then rebuild `dist/silphnet.zip`.
 
