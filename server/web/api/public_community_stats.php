@@ -37,10 +37,15 @@
 // A single COUNT(*)-shaped query isn't worth a shared helper in db.php for
 // that tradeoff.
 //
+// total_tiles_walked is the same kind of raw server-wide SUM as the four
+// totals above it - added alongside the new tiles-walked leaderboard
+// category (tiles_leaderboard.php / SN RECORDS) for the homepage ticker,
+// same "bigger number that only grows" framing as total_league_clears.
+//
 // GET: no params
 // Returns: {"ok":true,"total_trainers":N,"online_now":N,
 //   "total_pokedex_seen":N,"total_pokedex_caught":N,"total_league_clears":N,
-//   "total_badges":N,"versions":[
+//   "total_badges":N,"total_tiles_walked":N,"versions":[
 //     {"game_version":"RED","pokedex_seen":N,"pokedex_caught":N,"badges":N,"league_wins":N},
 //     ... one entry per SILPHNET_PUBLIC_TRACKED_VERSIONS entry
 //   ]}
@@ -69,7 +74,8 @@ try {
             SUM(pokedex_seen) AS pokedex_seen_total,
             SUM(pokedex_caught) AS pokedex_total,
             SUM(league_wins) AS league_total,
-            SUM(badges) AS badges_total
+            SUM(badges) AS badges_total,
+            SUM(tiles_walked) AS tiles_walked_total
          FROM friend_stats'
     );
     $row = $stmt->fetch();
@@ -114,6 +120,7 @@ try {
         'total_pokedex_caught' => (int)($row['pokedex_total'] ?? 0),
         'total_league_clears' => (int)($row['league_total'] ?? 0),
         'total_badges' => (int)($row['badges_total'] ?? 0),
+        'total_tiles_walked' => (int)($row['tiles_walked_total'] ?? 0),
         'versions' => $versions,
     ]);
 } catch (PDOException $e) {

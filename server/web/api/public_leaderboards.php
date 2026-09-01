@@ -36,7 +36,23 @@
 //   "league":[{"name","trainer_id","total","title"}, ...],   (top 50, ranked by league_wins)
 //   "badges":[{"name","trainer_id","total","title"}, ...],   (top 50, ranked by badges)
 //   "pokedex":[{"name","trainer_id","total","title"}, ...],  (top 50, ranked by pokedex_caught)
-//   "seen":[{"name","trainer_id","total","title"}, ...]}     (top 50, ranked by pokedex_seen)
+//   "seen":[{"name","trainer_id","total","title"}, ...],     (top 50, ranked by pokedex_seen)
+//   "tiles":[{"name","trainer_id","total","title"}, ...],    (top 50, ranked by tiles_walked)
+//   "dex_pct":[{"name","trainer_id","total","title"}, ...]}  (top 50, ranked by best single-save dex %)
+//
+// tiles mirrors league/badges/pokedex/seen exactly - SUM(tiles_walked)
+// across every game_version row an account has, same "one combined
+// number per PERSON" reasoning (see comment above), matching how the
+// in-game SN RECORDS sign's tiles-walked category is also summed
+// (tiles_leaderboard.php).
+//
+// dex_pct is the one list here that does NOT sum across saves - it's the
+// same BEST SINGLE-SAVE completion percentage the in-game SN RECORDS
+// sign's Pokedex category uses (dex_leaderboard.php), for the identical
+// reason: catching a species on two different saves isn't double
+// Pokedex progress. "total" for this list is a plain 0-100 integer
+// percentage, not a count - the website renders it with a trailing "%"
+// rather than as a bare number (see index.php's renderLeaderboardTab).
 //
 // Each list independently excludes accounts with a 0 total in the stat
 // THAT list is ranked by (same HAVING-style exclusion league_leaderboard.php
@@ -54,6 +70,22 @@
 require __DIR__ . '/db.php';
 
 const SILPHNET_PUBLIC_LEADERBOARD_LIMIT = 50;
+const SILPHNET_GEN1_DEX_TOTAL = 151;
+const SILPHNET_GEN2_DEX_TOTAL = 251;
+
+// Same helper as dex_leaderboard.php - turns { gen1_caught, gen2_caught }
+// (either may be null - no save of that generation exists yet for this
+// account) into a single best 0-100 int. Kept as its own local copy
+// rather than shared/required from dex_leaderboard.php, matching this
+// project's existing convention of small self-contained API endpoints
+// with no shared PHP modules beyond db.php/auth.php.
+function silphnet_best_dex_pct($gen1Caught, $gen2Caught) {
+    $gen1Pct = $gen1Caught !== null ? ((int)$gen1Caught / SILPHNET_GEN1_DEX_TOTAL) * 100 : 0;
+    $gen2Pct = $gen2Caught !== null ? ((int)$gen2Caught / SILPHNET_GEN2_DEX_TOTAL) * 100 : 0;
+    $best = max($gen1Pct, $gen2Pct);
+    if ($best > 100) $best = 100;
+    return (int)round($best);
+}
 
 // Priority-ordered tier list - first match wins, evaluated top to bottom
 // against one account's own combined totals. Deliberately NOT a simple
@@ -82,7 +114,10 @@ try {
                 SUM(fs.league_wins) AS league_total,
                 SUM(fs.badges) AS badges_total,
                 SUM(fs.pokedex_caught) AS pokedex_total,
-                SUM(fs.pokedex_seen) AS seen_total
+                SUM(fs.pokedex_seen) AS seen_total,
+                SUM(fs.tiles_walked) AS tiles_total,
+                MAX(CASE WHEN fs.game_version IN ("GOLD","SILVER","CRYSTAL") THEN NULL ELSE fs.pokedex_caught END) AS gen1_caught,
+                MAX(CASE WHEN fs.game_version IN ("GOLD","SILVER","CRYSTAL") THEN fs.pokedex_caught ELSE NULL END) AS gen2_caught
          FROM friend_stats fs
          JOIN accounts a ON a.account_id = fs.account_id
          GROUP BY a.account_id, a.name, a.trainer_id'
@@ -96,6 +131,8 @@ try {
         $badgesTotal = (int)$r['badges_total'];
         $pokedexTotal = (int)$r['pokedex_total'];
         $seenTotal = (int)$r['seen_total'];
+        $tilesTotal = (int)$r['tiles_total'];
+        $dexPct = silphnet_best_dex_pct($r['gen1_caught'], $r['gen2_caught']);
         $players[] = [
             'name' => $r['name'],
             'trainer_id' => str_pad($r['trainer_id'], 5, '0', STR_PAD_LEFT),
@@ -103,6 +140,8 @@ try {
             'badges_total' => $badgesTotal,
             'pokedex_total' => $pokedexTotal,
             'seen_total' => $seenTotal,
+            'tiles_total' => $tilesTotal,
+            'dex_pct_total' => $dexPct,
             'title' => silphnet_public_title($leagueTotal, $badgesTotal, $pokedexTotal),
         ];
     }
@@ -138,6 +177,8 @@ try {
         'badges' => $buildList('badges_total'),
         'pokedex' => $buildList('pokedex_total'),
         'seen' => $buildList('seen_total'),
+        'tiles' => $buildList('tiles_total'),
+        'dex_pct' => $buildList('dex_pct_total'),
     ]);
 } catch (PDOException $e) {
     silphnet_error('db error', 500);

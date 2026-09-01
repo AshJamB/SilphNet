@@ -420,6 +420,8 @@ $ghRelease = silphnet_github_get('https://api.github.com/repos/AshJamB/SilphNet/
         <button type="button" class="lb-tab" data-tab="badges">Badges</button>
         <button type="button" class="lb-tab" data-tab="pokedex">Pokedex Caught</button>
         <button type="button" class="lb-tab" data-tab="seen">Pokedex Seen</button>
+        <button type="button" class="lb-tab" data-tab="tiles">Tiles Walked</button>
+        <button type="button" class="lb-tab" data-tab="dex_pct">Dex Completion</button>
       </div>
       <p class="modal-empty" id="lbStatus">Loading leaderboard&hellip;</p>
       <table class="lb-table" id="lbTable" style="display: none;">
@@ -740,7 +742,11 @@ function renderLeaderboardTab() {
     tr.querySelector('.lb-name').textContent = p.name;
     tr.querySelector('.trainer-title').textContent = p.title;
     tr.querySelector('.lb-id').textContent = `ID ${p.trainer_id}`;
-    tr.querySelector('.lb-total').textContent = p.total;
+    // dex_pct is the one tab whose "total" is a 0-100 percentage rather
+    // than a plain count (see public_leaderboards.php's own comment on
+    // that list) - shown with a trailing "%" here only, every other tab
+    // renders its number as-is same as before.
+    tr.querySelector('.lb-total').textContent = lbActiveTab === 'dex_pct' ? `${p.total}%` : p.total;
     body.appendChild(tr);
   });
 }
@@ -798,6 +804,7 @@ function buildTickerPhrases(data) {
     `<strong>${data.total_pokedex_caught}</strong> Pokemon caught by the SilphNet community`,
     `<strong>${data.total_league_clears}</strong> league clears and counting`,
     `<strong>${data.total_badges}</strong> badges earned across all trainers`,
+    `<strong>${data.total_tiles_walked}</strong> tiles walked in-game`,
   ];
 }
 

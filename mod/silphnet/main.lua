@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.15.0)
+-- SilphNet - async presence + friends (v1.15.2)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -3861,42 +3861,39 @@ return function(mod)
       -- self-inclusive, so this stays on a screen that has nothing to do
       -- with friends at all.
       --
-      -- Inserted BEFORE "SN ABOUT" (i.e. this call runs before that
-      -- one), not after - each insertBefore(items, "QUIT", ...) call
-      -- lands its row immediately above QUIT, pushing any row inserted
-      -- by an EARLIER call further up the list (see the comment above
-      -- the SN NEARBY insert: "both SilphNet rows land together just
-      -- above it" - later calls end up closer to QUIT/the bottom, not
-      -- further from it). Ordering these calls ONLINE-then-ABOUT (rather
-      -- than the reverse) is what keeps About pinned as the last
-      -- SilphNet row, per direct request ("About should always be the
-      -- bottom menu item").
       mod.ui.insertBefore(items, "QUIT", { label = "SN ONLINE",
         onSelect = function() mod.ui.push(g, "SilphNetOnline") end })
-      -- Only shown once the server has actually confirmed there's no
-      -- recovery email on file (hasEmail == false, not nil/unknown and
-      -- not true) - built directly for a real reported case: a player
-      -- locked out with no email set and no self-service way back in.
-      -- The mod itself still can't capture an email address at all (see
-      -- the naming-grid research this was weighed against - typeable in
-      -- principle once "@" is added to the grid, but that grid is a
-      -- fixed-size box with no room to spare, already stretched by the
-      -- digit row this mod adds for PASSWORD, and typing a full address
-      -- one D-pad click at a time is real friction even if it fit) - so
-      -- this row is a pointer to the website's account page, where typing
-      -- an email is trivial, rather than an attempt to capture one here.
-      -- Inserted before SN ABOUT (not after) so About stays the last row
-      -- either way, same ordering rule as every row above it.
+      -- SN RECOVER ACCT stays its OWN top-level row, conditional on
+      -- hasEmail == false - deliberately NOT folded into SN MORE below.
+      -- This row is self-removing: the moment the account gets a
+      -- recovery email on file (via the website), it disappears from
+      -- the Start Menu on its own, so unlike About/Milestones it's never
+      -- permanent clutter for the vast majority of players who never see
+      -- it at all. Burying it inside SN MORE would only ever cost the
+      -- one player who's actually locked out - exactly the moment an
+      -- extra menu layer hurts most - for a decluttering benefit nobody
+      -- else would even notice, since it's already invisible to everyone
+      -- who doesn't need it.
       if hasEmail == false then
         mod.ui.insertBefore(items, "QUIT", { label = "SN RECOVER ACCT",
           onSelect = function() mod.ui.push(g, "SilphNetRecoverAcct") end })
       end
-      -- Inserted before SN ABOUT (not after) so About stays the last row,
-      -- same ordering rule every row above it already follows.
-      mod.ui.insertBefore(items, "QUIT", { label = "SN MILESTONES",
-        onSelect = function() mod.ui.push(g, "SilphNetMilestones") end })
-      mod.ui.insertBefore(items, "QUIT", { label = "SN ABOUT",
-        onSelect = function() mod.ui.push(g, "SilphNetAbout") end })
+      -- SN MORE - a single row opening a small submenu (About /
+      -- Milestones), rather than each of those getting its own top-level
+      -- Start Menu row. Reported directly as a real usability problem,
+      -- not a design nitpick: this project's own "each major feature
+      -- gets its own row" convention (see SN NEARBY's comment above) was
+      -- fine while there were 2-3 SilphNet rows, but by the time
+      -- MILESTONES/ABOUT were both separate rows on top of
+      -- STATUS/NEARBY/ONLINE, the Start Menu had grown to 5-6 SilphNet
+      -- rows - "the main menu is now getting full of SN stuff." STATUS,
+      -- NEARBY, and ONLINE stay top-level (core, frequently-used
+      -- gameplay features); About/Milestones are both comparatively
+      -- low-frequency/informational (and, unlike Recover Acct, ALWAYS
+      -- visible once logged in - real, permanent clutter, not a rare
+      -- conditional row), so those two are the ones that moved.
+      mod.ui.insertBefore(items, "QUIT", { label = "SN MORE",
+        onSelect = function() mod.ui.push(g, "SilphNetMore") end })
     end)
     return nextFn(g, items)
   end)
@@ -3951,6 +3948,61 @@ return function(mod)
           -- long real-world input, not its own version string growing.
           Font.draw("THANKS FOR", 16, 112)
           Font.draw(("PLAYING! V" .. tostring(mod.version or "?")):sub(1, 16), 16, 120)
+          Font.draw("B:BACK", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- SN MORE - the submenu SN MORE's own Start Menu row opens (see that
+  -- row's own comment for why this exists). A plain UP/DOWN + A/B list
+  -- menu, the same shape the naming-grid/options screens elsewhere in
+  -- this engine already use for "pick one of a few things" - nothing
+  -- about this needs to be more elaborate than that. Deliberately does
+  -- NOT include RECOVER ACCT - that row stays its own top-level,
+  -- conditional Start Menu entry (see its own comment above, right
+  -- where it's inserted) precisely because it's self-removing and
+  -- rare, unlike About/Milestones which are permanent, always-visible
+  -- clutter once logged in.
+  pcall(function()
+    mod.content.screens:register("SilphNetMore", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true, index = 1 }
+        local function items()
+          local list = {}
+          list[#list + 1] = { label = "MILESTONES", screen = "SilphNetMilestones" }
+          list[#list + 1] = { label = "ABOUT", screen = "SilphNetAbout" }
+          return list
+        end
+        function self:update(dt)
+          local list = items()
+          local n = #list
+          if self.index > n then self.index = 1 end
+          local input = g.input
+          if n > 0 then
+            if input:wasPressed("down") then
+              self.index = (self.index % n) + 1
+            elseif input:wasPressed("up") then
+              self.index = self.index - 1
+              if self.index < 1 then self.index = n end
+            elseif input:wasPressed("a") then
+              local sel = list[self.index]
+              if sel then mod.ui.push(g, sel.screen) end
+            end
+          end
+          if input:wasPressed("b") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("SN MORE", 16, 8)
+          local list = items()
+          for i, it in ipairs(list) do
+            local marker = (i == self.index) and "> " or "  "
+            Font.draw((marker .. it.label):sub(1, 16), 16, 16 + i * 8)
+          end
+          Font.draw("A:OPEN UD:MOVE", 16, 120)
           Font.draw("B:BACK", 16, 128)
         end
         return self

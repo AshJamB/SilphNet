@@ -7,7 +7,7 @@ Install it, log in with a name and password, and see where your friends
 were last - on any platform the game runs on, with nothing extra to run or
 configure on your end.
 
-**Status: v1.12.0 - Every gym (Gen1 Kanto, Gen2 Johto, Gen2 Kanto) now has its own sign listing which of your accepted friends already hold that badge, and a league leaderboard sign near the Elite Four entrance ranks total league clears (ALL PLAYERS / FRIENDS, ascending or descending). Both placed at runtime with no hardcoded coordinates, and both show server-computed names/numbers only - no free text. Gen 2 (Pokemon Gold/Silver, currently Beta in the Gen1Recomp launcher) is supported alongside Red/Blue/Yellow. HTTP requests are also async, via the engine's `mod.fetch` API (a real, documented replacement for the `love.thread` capability an earlier engine update permanently blocked), falling back to synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
+**Status: v1.15.1 - Every gym (Gen1 Kanto, Gen2 Johto, Gen2 Kanto) now has its own sign listing which of your accepted friends already hold that badge. A second sign near the Elite Four entrance, "SN RECORDS", cycles through THREE ranked categories on one sign (A to switch) - total league clears, Pokedex completion (best single save), and tiles walked - each with ALL PLAYERS / FRIENDS pages and an ascending/descending toggle. Both signs are placed at runtime with no hardcoded coordinates, and both show server-computed names/numbers only - no free text. Friend activity now also reports earning a badge, leveling up, and winning the league, not just catching a Pokemon. SN MILESTONES tracks five small personal-first social milestones (first friend, 5 friends, a crowded server, a friend nearby, 1000 tiles walked). Gen 2 (Gold, Silver, and Crystal) is fully supported alongside Red/Blue/Yellow. The Start Menu stays to five SilphNet rows - low-frequency ones (About, Milestones, and the account-recovery row that only appears when needed) are folded into one "SN MORE" submenu rather than each getting their own row. HTTP requests are async via the engine's `mod.fetch` API, falling back to synchronous behaviour automatically on any build/permission set where `mod.fetch` isn't available.**
 Log in with
 a name and password to get a unique 5-digit Trainer ID, then add friends
 entirely in-game by entering their Trainer ID on a D-pad digit spinner - no
@@ -56,8 +56,10 @@ mod/silphnet/           the LÖVE mod (install this into the game's mods/ folder
 dist/silphnet.zip        the mod, zipped and ready to install
 server/
   web/                   the site root - upload this whole folder as-is
-    index.php              public landing page (features, install steps, GitHub link, socials)
+    index.php              public landing page (features, install steps, leaderboards, community stats ticker, GitHub link, socials)
     account.php            log in on the web to manage your account (rename, Trainer ID, password, recovery email)
+    admin.php              admin-only recovery tool (not linked from anywhere public) - generate a password-reset link for an
+                            account with no recovery email on file, the one case account.php's own forgot-password flow can't help with
     assets/                images used by index.php (logo, banner)
     robots.txt             crawler policy - deliberately permissive, explicitly allows AI assistant/LLM crawlers
     sitemap.xml             lists index.php/account.php for search engines
@@ -77,6 +79,8 @@ server/
       set_email.php          add/change your recovery email (password-gated; stored encrypted, see SECURITY.md)
       request_password_reset.php   request a password-reset email (public - only works if a recovery email is on file)
       reset_password.php     consume a password-reset link/token and set a new password
+      admin_reset_password.php   admin.php's backend - generates a real password-reset row for an account with no
+                                  recovery email on file, refuses to run without the correct admin key
       email_crypto.php        AES-256-GCM encrypt/decrypt helpers for the stored recovery email
       mailer.php               thin wrapper around the vendored PHPMailer, sends the reset email
       vendor/phpmailer/        vendored PHPMailer library (3 files, copied from the official release - no composer needed)
@@ -87,8 +91,18 @@ server/
       remove_friend.php        remove an accepted friend (or decline/cancel a pending request)
       pending_requests.php     list incoming friend requests awaiting your accept
       online_count.php         count of everyone currently online, globally (not just friends)
-      online_by_version.php    everyone online, grouped by game version (RED/BLUE/YELLOW/GOLD/SILVER), with player lists
+      online_by_version.php    everyone online, grouped by game version (RED/BLUE/YELLOW/GOLD/SILVER/CRYSTAL), with player lists
       nearby.php               everyone else (friend or not) currently on a given map
+      stats.php               upload a stats snapshot (badges, Pokedex, League wins, money, tiles walked, party) and/or an activity message
+      league_leaderboard.php   in-game SN RECORDS: total league clears, ALL PLAYERS/FRIENDS (requires a token)
+      dex_leaderboard.php      in-game SN RECORDS: best single-save Pokedex completion %, ALL PLAYERS/FRIENDS (requires a token)
+      tiles_leaderboard.php    in-game SN RECORDS: total tiles walked, ALL PLAYERS/FRIENDS (requires a token)
+      friend_detail.php        a friend's self-reported stats/activity/party (requires a token)
+      public_leaderboards.php     PUBLIC, unauthenticated - the website's leaderboard tabs (league/badges/pokedex/seen/tiles/dex completion)
+      public_community_stats.php  PUBLIC, unauthenticated - the website's server-wide totals ticker and per-version stat breakdowns
+      public_online_status.php    PUBLIC, unauthenticated - online-now count and per-version breakdown for the website
+      public_online_players.php   PUBLIC, unauthenticated - who's online right now, for the website
+      public_stat_by_version.php  PUBLIC, unauthenticated - one stat's per-player ranking within a single game version, for the website's drilldown modal
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
 assets/                  images used in this README (banner, etc.)
@@ -190,12 +204,34 @@ whose client hasn't reported a real game.save.version yet) never appear
 here - see "There's deliberately no..." further down for why this
 mod can tell RED/BLUE/YELLOW/GOLD/SILVER apart at all.
 
-A fifth Start Menu row, **SN ABOUT** (credits and links), always sits
-last, directly above **QUIT** - a deliberate, permanent position as the
-mod grows new rows over time, not just wherever it happened to land.
-- **RIGHT** - open Add Friend (enter a Trainer ID with a digit spinner:
-  **UP/DOWN** changes the selected digit, **LEFT/RIGHT** moves the cursor,
-  **A** sends the request)
+A fourth-and-a-half Start Menu row, **SN RECOVER ACCT**, only appears
+when the server confirms this account has no recovery email on file -
+it's self-removing, disappearing on its own the moment one gets set, so
+most players never see it at all. It opens a short read-only screen
+pointing to the SilphNet website's account page, where an admin-assisted
+or self-service recovery email can actually be set - built for a real
+reported case, an account locked out on a save with no email and no
+self-service way back in. It stays its own top-level row rather than
+being tucked into a submenu, deliberately - burying a rare-but-urgent
+row behind an extra menu layer would only ever cost the one player who's
+actually locked out, at the worst possible moment.
+
+A final Start Menu row, **SN MORE**, always sits last, directly above
+**QUIT** - a deliberate, permanent position as the mod grows new rows
+over time, not just wherever it happened to land. It opens a small
+submenu (**UP/DOWN** to pick, **A** to open, **B** to back out) for the
+two rows that were previously separate but are permanent, always-visible
+clutter once logged in (unlike Recover Acct above):
+
+- **MILESTONES** - five small, entirely personal (not server-ranked)
+  social milestones: FIRST FRIEND, 5 FRIENDS, CROWDED (10+ people online
+  at once), FRIEND NEARBY, and 1000 TILES. Each is a one-way flag, same
+  "only ever earned, never revoked" spirit as the league-clears tracking.
+- **ABOUT** - credits and a link to [ash.jamtv.co.uk](https://ash.jamtv.co.uk).
+
+- **RIGHT** (from the main **SN \<name\>** row) - open Add Friend (enter a
+  Trainer ID with a digit spinner: **UP/DOWN** changes the selected digit,
+  **LEFT/RIGHT** moves the cursor, **A** sends the request)
 - **LEFT** - open pending friend requests (always opens, showing "NONE
   PENDING" if there aren't any; page through with **LEFT/RIGHT**, **A** to
   accept)
@@ -248,22 +284,32 @@ the page now, not a conditional hint.
   can only ever read its own save data, never someone else's. Shows "NO
   STATS YET" if they haven't uploaded a snapshot for that version yet.
 - **ACTIVITY pages**: that version's latest status message on two lines -
-  e.g. "CAUGHT LVL 25" / "BLASTOISE" - with its own time-ago, plus that
-  friend's overall last-known map and time-ago (their single most recent
-  ping across ALL their versions, not scoped to just this one) repeated
-  from the main friends list. Two lines, not one, since a long species
-  name plus the level prefix risked overflowing a single 16-char line.
-  These are deliberately two separate timestamps, not one shared "X AGO" -
-  catching something and being last seen online are different moments (a
-  friend could catch something and then go offline, or still be walking
-  around minutes later).
+  e.g. "CAUGHT LVL 25" / "BLASTOISE", "EARNED BOULDER" / "BADGE", "LVL UP
+  LVL 25" / "CHARMELEON", or "BEAT THE LEAGUE" - with its own time-ago,
+  plus that friend's overall last-known map and time-ago (their single
+  most recent ping across ALL their versions, not scoped to just this
+  one) repeated from the main friends list. Two lines, not one, since a
+  long species name plus the level prefix risked overflowing a single
+  16-char line. These are deliberately two separate timestamps, not one
+  shared "X AGO" - an activity event and being last seen online are
+  different moments (a friend could earn a badge and then go offline, or
+  still be walking around minutes later).
 
-Activity is driven by the real, documented `pokemon.caught` event (not a
-poll) - fires the moment a catch happens and uploads immediately,
-independent of the slower stats cycle. Level comes from that event's own
-`mon` field. Stats themselves (badges/Pokédex counts/money/League wins)
-upload roughly every 3 minutes of play instead - slower than the ~30s
-presence cycle, since none of those need to be that fresh.
+Catching a Pokemon is driven by the real, documented `pokemon.caught`
+event (not a poll) - fires the moment a catch happens and uploads
+immediately, independent of the slower stats cycle, with level read off
+that event's own `mon` field. Earning a badge, leveling up a party mon,
+and winning the League are all detected differently: there's no
+documented event for a badge being earned at all, and while a real
+`pokemon.level_up` event does exist, it's undocumented and not part of
+the engine's stable published API - so all three are instead detected by
+comparing each stats snapshot against the previous one on the same ~3
+min stats cycle (a badge bit that just turned on, a party slot's
+species+level that just increased, or league_wins that just went up).
+The trade-off is a report can lag up to ~3 minutes behind the real
+moment, the same trade-off league_wins' own leaderboard tracking already
+accepted - nothing from before the very first snapshot of a session is
+ever reported retroactively, only genuine changes seen live from then on.
 
 ### 4. Play
 
@@ -297,10 +343,10 @@ data cap.
 
 ## Troubleshooting
 
-- **`SILPHNET OFF` / `SILPHNET LOGIN FAIL`** -> usually a connectivity blip
+- **`SN OFF` / `SN LOGIN FAIL`** -> usually a connectivity blip
   with the SilphNet service; try again in a minute. If it persists, flag it
   (see Notes below).
-- **`SILPHNET SET NAME/PASS`** -> set MY NAME and a PASSWORD in the mod
+- **`SN SET NAME/PASS`** -> set MY NAME and a PASSWORD in the mod
   options; that pair is the account.
 - **Mod errors** -> the Mod Manager lists them per-mod, prefixed
   `[silphnet]`.
@@ -417,11 +463,6 @@ status screen while logging in, Add Friend while sending, the remove-friend
 confirm while removing) - `update(dt)` runs every frame regardless of
 movement, so those specific waits now resolve immediately.
 
-There's deliberately no game-version (Red/Blue/Yellow) tracking: the
-engine doesn't expose which ROM a player imported anywhere in the mod API,
-so this can't be auto-detected, and there's no in-game picker for it
-either - see the Roadmap below.
-
 If something misbehaves, the `[silphnet]` manager errors will point right
 at it.
 
@@ -440,7 +481,8 @@ at it.
 9. Done - "who's nearby" (non-friends) - its own Start Menu row ("SN NEARBY") and screen, showing everyone else's name/Trainer ID on your current map, friend or not
 10. Done - status screen controls swapped once logged in: A opens the friends list, START is re-auth (was the other way round)
 11. Done - friend detail screen (press A on a friend in the friends list): self-reported stats (badges, Pokédex seen/caught, League wins, money) plus latest activity - currently catches only, shown on two lines ("CAUGHT LVL 25" / "BLASTOISE") - with its own time-ago, and last-seen repeated from the main friends list
-12. Done (partial) - auto status updates: driven by the real `pokemon.caught` event (not a poll), including level from the event's own payload, uploaded immediately independent of the slower ~3 min stats cycle. Trainer-battle events ("DFTD BUG CATCHER" etc.) are NOT wired up - see the corrected note on item 12 below, this was originally overstated as straightforwardly buildable and isn't. Level-up/badge-earned/League-win also aren't wired up yet.
+12. Done (partial) - auto status updates: catching a Pokemon is driven by the real `pokemon.caught` event (not a poll), including level from the event's own payload, uploaded immediately independent of the slower ~3 min stats cycle. Earning a badge, leveling up, and winning the League are now also reported - detected by polling/diffing each ~3 min stats snapshot against the previous one rather than an event, deliberately: there's no event at all for a badge being earned, and while `pokemon.level_up` is real, it's undocumented/unstable, so both got the same safe polling treatment as League wins (see the "Friend detail screen" section above for the full reasoning). Trainer-battle events ("DFTD BUG CATCHER" etc.) are NOT wired up - see the corrected note on item 12 below, this was originally overstated as straightforwardly buildable and isn't.
+16. Done - SN RECORDS: the league-clears sign near the Elite Four entrance now cycles (via **A**) through two more categories on the same sign - Pokedex completion (best single save, not summed across saves) and tiles walked (in-game steps, tracked via the real `world.stepped` event - deliberately NOT the engine's separate real-world-pedometer bridge, which is mobile-only and would exclude every desktop player). Folded onto the one existing sign rather than adding two more NPCs, to avoid multiplying the sign-placement risk documented under item 14 above. Also done: SN MILESTONES (five small, personal, not server-ranked social milestones - see the Start Menu walkthrough above for the list), and the Start Menu decluttering itself (SN MILESTONES and SN ABOUT folded into one "SN MORE" submenu; SN RECOVER ACCT deliberately stayed its own top-level conditional/self-removing row rather than moving in too - see the Start Menu walkthrough above).
 13. Done - real game version detection: `game.save.version` (confirmed directly from the engine's own `SaveData.lua`) replaces the permanent "UNKNOWN" placeholder that had sat unverified for most of this project. A friend who's genuinely played more than one version (e.g. cleared a BLUE run, then started a fresh YELLOW one) shows a version tag on the friends list ("1/3 (BLUE)") and can be viewed per-version on the friend detail screen (**SELECT** cycles versions there) - both only appear once a friend actually has more than one to disambiguate.
 14. Done - friends-who-cleared-this-gym sign (see item 11 below for the original planning note): a genuinely separate sign/NPC, not a rewrite of any vanilla statue's frozen per-map text, placed in every gym across all three supported runs (Gen1 Kanto, Gen2 Johto, Gen2 Kanto). Lists which of your accepted friends already hold that specific gym's badge, via a new per-account `badges_mask` bit (one bit per real badge id, uploaded alongside the existing stats snapshot). Solves the placement problem the original note worried about (checking every gym's layout map-by-map) without needing to: placement is discovered live at runtime via `mod.world:mapOverview()`'s read-only collision snapshot, searching a small plus/3x3 neighbourhood around wherever YOU yourself just walked in (`mod.world:current()`) for the first walkable, non-warp, unoccupied tile - guaranteed safe by construction, since a neighbour of a tile you just stood on is necessarily reachable ground, with zero hardcoded coordinates (this project ships no ROM data).
 15. Done - league leaderboard sign, the "first-to-clear-the-league" idea from item 14 below, generalized to a full ranked list rather than just first place: a new sign near the Elite Four entrance (`INDIGO_PLATEAU_LOBBY`) shows total league clears (`SUM(league_wins)` across every game_version an account has played, one combined number per person) with two pages (ALL PLAYERS top 50 / FRIENDS-only) and a descending/ascending toggle. Server-computed names/Trainer IDs/numbers only, same no-free-text policy as everything else in this mod.

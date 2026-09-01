@@ -4,6 +4,19 @@
 **Author / Lead Engineer:** Independent Developer  
 **Status:** Architecture Design & Implementation Blueprint  
 
+> **Superseded.** This is the ORIGINAL design study, kept for reference -
+> the main README already calls it out as such. What actually got built
+> is a much smaller, deliberately different system: no Go/Node.js VPS, no
+> spatial server, no real-time overworld, no PvP battling or trading - see
+> the root `README.md` for what SilphNet actually is today (plain PHP +
+> MySQL, async HTTP presence, static last-known-position markers). The
+> real-time relay this document describes was built, then retired - see
+> `archive/tcp_relay_retired/` and the main README's "Why this isn't
+> real-time" section for why. Treat everything below as historical
+> context for what was considered, not a description of the shipped mod.
+> (The accompanying `.pdf` is the original, unannotated version of this
+> document.)
+
 ---
 
 ## Executive Summary & Core Vision
