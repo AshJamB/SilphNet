@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.16.1)
+-- SilphNet - async presence + friends (v1.16.3)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -4000,8 +4000,21 @@ return function(mod)
           Font.draw("SN MORE", 16, 8)
           local list = items()
           for i, it in ipairs(list) do
-            local marker = (i == self.index) and "> " or "  "
-            Font.draw((marker .. it.label):sub(1, 16), 16, 16 + i * 8)
+            -- Wraps the selected row in "(" ")" rather than a leading
+            -- ">" - see this screen's own bugfix note in mod.card. ">"
+            -- turned out to not be in this font's glyph set at all, so
+            -- it silently drew as blank space. A leading "-" was tried
+            -- next, but "-" already means something specific elsewhere
+            -- in this same mod (SilphNetMilestones marks a LOCKED
+            -- milestone with "- ") - reusing it here as "selected"
+            -- risked a second, different confusion instead of fixing
+            -- the first one. Parentheses aren't used as a marker
+            -- anywhere else in this file, so there's no such collision,
+            -- and "(" "/" ")" are both already confirmed rendering
+            -- correctly elsewhere ("- NEARBY (n) -").
+            local label = it.label:sub(1, 14)
+            local shown = (i == self.index) and ("(" .. label .. ")") or ("  " .. label)
+            Font.draw(shown, 16, 16 + i * 8)
           end
           Font.draw("A:OPEN UD:MOVE", 16, 120)
           Font.draw("B:BACK", 16, 128)
