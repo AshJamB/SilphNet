@@ -148,6 +148,17 @@ CREATE TABLE IF NOT EXISTS friend_stats (
   money          INT UNSIGNED NOT NULL DEFAULT 0,
   play_seconds   INT UNSIGNED NOT NULL DEFAULT 0,
   party          VARCHAR(512) NOT NULL DEFAULT '',
+  -- Tiles walked in the overworld this save, counted client-side off the
+  -- real world.stepped event (main.lua has no other way to know this - it
+  -- isn't a field the engine's own save data tracks anywhere). Same
+  -- one-way-ratchet treatment as league_wins in stats.php and for the same
+  -- reason: a mod.save-backed running counter is just as vulnerable to a
+  -- .sav re-import resetting it as game.save.hallOfFame was, so the SERVER
+  -- side floors this at whatever's already been credited rather than
+  -- trusting a client's latest report as-is. INT UNSIGNED, not SMALLINT -
+  -- a lifetime walking total can realistically exceed 65535 tiles well
+  -- within normal play.
+  tiles_walked   INT UNSIGNED NOT NULL DEFAULT 0,
   updated_at     DATETIME NOT NULL,
   PRIMARY KEY (account_id, game_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

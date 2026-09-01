@@ -4,8 +4,8 @@
 // (account_id, game_version), never trusts a caller-supplied account_id.
 //
 // POST: token, [game_version], [badges, badges_mask, pokedex_seen,
-//        pokedex_caught, league_wins, money, play_seconds, party],
-//        [activity]
+//        pokedex_caught, league_wins, money, play_seconds, party,
+//        tiles_walked], [activity]
 //
 // badges_mask is a bit-per-badge snapshot (bit N per BADGE_BIT_INDEX in
 // main.lua's encodeBadgeMask), separate from the plain "badges" COUNT
@@ -50,7 +50,8 @@ if (!in_array($version, ['RED', 'BLUE', 'YELLOW', 'GOLD', 'SILVER', 'CRYSTAL', '
 $hasStats = isset($_POST['badges']) || isset($_GET['badges']) || isset($_POST['badges_mask']) || isset($_GET['badges_mask'])
     || isset($_POST['pokedex_seen']) || isset($_GET['pokedex_seen'])
     || isset($_POST['pokedex_caught']) || isset($_GET['pokedex_caught']) || isset($_POST['league_wins']) || isset($_GET['league_wins']) || isset($_POST['money']) || isset($_GET['money'])
-    || isset($_POST['play_seconds']) || isset($_GET['play_seconds']) || isset($_POST['party']) || isset($_GET['party']);
+    || isset($_POST['play_seconds']) || isset($_GET['play_seconds']) || isset($_POST['party']) || isset($_GET['party'])
+    || isset($_POST['tiles_walked']) || isset($_GET['tiles_walked']);
 $activity = rtrim($_POST['activity'] ?? $_GET['activity'] ?? '', " \t\0\x0B");
 
 if (!$hasStats && $activity === '') {
@@ -102,15 +103,23 @@ try {
         // future re-import (or any other client-side bug that briefly
         // under-reports) to drag that number back down - it can only ever
         // go up from here, from any client.
+        // tiles_walked gets the SAME one-way-ratchet treatment as
+        // league_wins, for an analogous reason: it's a lifetime counter
+        // main.lua tracks itself (world.stepped, persisted via mod.save,
+        // not a field the engine's own save data exposes at all), so it's
+        // just as exposed to a .sav re-import silently resetting the
+        // client-side counter as game.save.hallOfFame was. See schema.sql's
+        // own comment on this column for the full reasoning.
         $stmt = $pdo->prepare(
             'INSERT INTO friend_stats
-               (account_id, game_version, badges, badges_mask, pokedex_seen, pokedex_caught, league_wins, money, play_seconds, party, updated_at)
+               (account_id, game_version, badges, badges_mask, pokedex_seen, pokedex_caught, league_wins, money, play_seconds, party, tiles_walked, updated_at)
              VALUES
-               (:account_id, :version, :badges, :badges_mask, :seen, :caught, :wins, :money, :play_seconds, :party, NOW())
+               (:account_id, :version, :badges, :badges_mask, :seen, :caught, :wins, :money, :play_seconds, :party, :tiles, NOW())
              ON DUPLICATE KEY UPDATE
                badges = VALUES(badges), badges_mask = VALUES(badges_mask), pokedex_seen = VALUES(pokedex_seen),
                pokedex_caught = VALUES(pokedex_caught), league_wins = GREATEST(VALUES(league_wins), league_wins),
-               money = VALUES(money), play_seconds = VALUES(play_seconds), party = VALUES(party), updated_at = NOW()'
+               money = VALUES(money), play_seconds = VALUES(play_seconds), party = VALUES(party),
+               tiles_walked = GREATEST(VALUES(tiles_walked), tiles_walked), updated_at = NOW()'
         );
         $stmt->execute([
             ':account_id' => $account['account_id'], ':version' => $version,
@@ -122,6 +131,7 @@ try {
             ':money' => (int)($_POST['money'] ?? $_GET['money'] ?? 0),
             ':play_seconds' => (int)($_POST['play_seconds'] ?? $_GET['play_seconds'] ?? 0),
             ':party' => $party,
+            ':tiles' => (int)($_POST['tiles_walked'] ?? $_GET['tiles_walked'] ?? 0),
         ]);
     }
 

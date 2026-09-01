@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.14.5)
+-- SilphNet - async presence + friends (v1.15.0)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -907,6 +907,7 @@ return function(mod)
   -- it would have failed completely silently with no error ever logged.
   local fireFriendsFetch, firePendingFetch, drainHttpResults, fireOnlineCountFetch, fireNearbyFetch
   local fireLeagueLeaderboardFetch   -- same forward-declare reasoning as the line above - see the comment there
+  local fireDexLeaderboardFetch, fireTilesLeaderboardFetch   -- same reasoning, for SN RECORDS' two new categories
   local fireFriendDetailFetch, fireStatsUpload, fireOnlineByVersionFetch
 
   local function onAuthOk(accId, name, token, trainerId, hasEmailStr)
@@ -1378,6 +1379,10 @@ return function(mod)
       money = money,
       playSeconds = readPlaySeconds(),
       party = encodePartySnapshot(),
+      -- Not read from `save` at all, unlike every field above - see
+      -- tilesWalked's own declaration comment for why this has to be the
+      -- mod's own tracked counter instead.
+      tilesWalked = tilesWalked,
     }
   end
 
@@ -1416,6 +1421,12 @@ return function(mod)
   -- previous unbounded "last one wins, always" behaviour.
   local PENDING_ACTIVITY_MAX = 5
   local pendingActivityQueue = {}   -- array of "CAUGHT LVL 25\nBLASTOISE" strings, oldest first
+  local function enqueueActivity(message)
+    table.insert(pendingActivityQueue, message)
+    if #pendingActivityQueue > PENDING_ACTIVITY_MAX then
+      table.remove(pendingActivityQueue, 1)   -- drop the oldest, not the newest
+    end
+  end
   local function queueCatchActivity(mon, species)
     local level = mon and tonumber(mon.level)
     local name = formatSpeciesName(species)
@@ -1424,11 +1435,100 @@ return function(mod)
     -- not one combined 32-char cap - a long species name can't borrow
     -- room from the level line or vice versa, since they're drawn on
     -- separate rows.
-    local message = line1:sub(1, 16) .. "\n" .. name:sub(1, 16)
-    table.insert(pendingActivityQueue, message)
-    if #pendingActivityQueue > PENDING_ACTIVITY_MAX then
-      table.remove(pendingActivityQueue, 1)   -- drop the oldest, not the newest
+    enqueueActivity(line1:sub(1, 16) .. "\n" .. name:sub(1, 16))
+  end
+
+  -- Badge-earned/level-up/league-win activity - all three POLLED against
+  -- the previous stats snapshot rather than event-driven, unlike
+  -- queueCatchActivity above (a real pokemon.caught event). Deliberate,
+  -- not a shortcut: direct engine research before building this found NO
+  -- documented, stable event for a badge being earned at all (the actual
+  -- grant path, src/world/gen2/FieldMoves.lua's setflag handling, is a
+  -- raw table write with no Runtime.emit anywhere), and while a real
+  -- pokemon.level_up event does exist and does fire correctly, it's
+  -- entirely UNDOCUMENTED (confirmed absent from docs/modding.md) - not
+  -- part of the engine's published, stable mod API, so it could change
+  -- shape or vanish in a future update with no warning and no versioning
+  -- guarantee. Polling on the SAME already-scheduled STATS_INTERVAL cycle
+  -- readStatsSnapshot() already runs on (see the wiring further down)
+  -- means these three activity types cost nothing extra network/timer-
+  -- wise, at the honest cost of only ever noticing a change up to 3
+  -- minutes after it happened, same trade-off league_wins' own polling
+  -- already accepted project-wide.
+  --
+  -- nil (not 0/empty-table) until the first real snapshot has been polled
+  -- at least once this session - the FIRST comparison after a fresh login
+  -- would otherwise fire "new badge" for every badge already earned
+  -- before this session even started. Deliberately session-scoped, not
+  -- persisted via mod.save - a missed diff across an app restart is a far
+  -- smaller cost than a burst of false "you just did this!" activity for
+  -- things a player did in a previous session.
+  local lastBadgesMask = nil
+  local lastLeagueWins = nil
+  local lastPartyLevels = nil   -- array of { species, level }, indexed by party slot
+
+  local function queueBadgeActivity(badgeId)
+    -- "NEW BADGE" (9 chars) leaves room to spare on its own line; the
+    -- badge id itself (e.g. BOULDERBADGE, 12 chars) fits the 16-char
+    -- budget on every real badge name in BADGE_BIT_INDEX without needing
+    -- its own truncation, but :sub(1,16) is kept anyway for the same
+    -- "never trust a budget by eye alone" discipline the rest of this
+    -- file already applies everywhere text is drawn.
+    enqueueActivity("NEW BADGE" .. "\n" .. tostring(badgeId):sub(1, 16))
+  end
+
+  local function queueLeagueWinActivity(newTotal)
+    enqueueActivity("BEAT THE LEAGUE" .. "\n" .. ("CLEARS " .. tostring(newTotal)):sub(1, 16))
+  end
+
+  local function queueLevelUpActivity(species, level)
+    enqueueActivity(("LVL UP! LVL " .. tostring(level)):sub(1, 16) .. "\n" .. formatSpeciesName(species):sub(1, 16))
+  end
+
+  -- Compares a freshly-read stats snapshot against the LAST one this
+  -- session and queues activity for whatever genuinely changed for the
+  -- better. Called right after readStatsSnapshot() on the STATS_INTERVAL
+  -- cycle - see that cycle's own comment on why this is poll-based rather
+  -- than event-driven for these three specifically.
+  local function detectStatsActivity(snap)
+    if not snap then return end
+    if lastBadgesMask ~= nil then
+      for badgeId, bit in pairs(BADGE_BIT_INDEX) do
+        if maskHasBit(snap.badgesMask, bit) and not maskHasBit(lastBadgesMask, bit) then
+          queueBadgeActivity(badgeId)
+        end
+      end
     end
+    lastBadgesMask = snap.badgesMask
+
+    if lastLeagueWins ~= nil and (tonumber(snap.leagueWins) or 0) > lastLeagueWins then
+      queueLeagueWinActivity(snap.leagueWins)
+    end
+    lastLeagueWins = tonumber(snap.leagueWins) or 0
+
+    -- Party levels are diffed by SLOT INDEX, matched against the SAME
+    -- species still being in that slot - deliberately conservative: a mon
+    -- that both leveled up AND got swapped to/from the PC in the same
+    -- ~3-minute window between polls won't be reported (looks like a
+    -- species change at that slot, not a level-up), rather than risk a
+    -- false report by assuming slot position alone means "same mon."
+    -- decodePartySnapshot is the same decoder friend_detail's own party
+    -- page already relies on to turn this exact encoded string back into
+    -- structured data - reused here rather than re-reading game.save.party
+    -- directly, since snap.party is already the authoritative encoded
+    -- snapshot for this exact poll.
+    local party = decodePartySnapshot(snap.party)
+    if lastPartyLevels then
+      for i, mon in ipairs(party) do
+        local prev = lastPartyLevels[i]
+        if prev and prev.species == mon.species and mon.level > prev.level then
+          queueLevelUpActivity(mon.species, mon.level)
+        end
+      end
+    end
+    local snapshot = {}
+    for i, mon in ipairs(party) do snapshot[i] = { species = mon.species, level = mon.level } end
+    lastPartyLevels = snapshot
   end
 
   -- Global online count (everyone, not just friends) and who's on the
@@ -1454,6 +1554,35 @@ return function(mod)
   -- SilphNetLeagueSign's leagueSortAsc below) - reversing this array in
   -- place rather than needing a second request for the opposite order.
   local leagueLeaderboard = nil
+
+  -- Same shape/convention as leagueLeaderboard above, for the two new SN
+  -- RECORDS categories (see fireDexLeaderboardFetch/fireTilesLeaderboardFetch
+  -- below) - both reuse parseLeagueLeaderboardJson as-is since it's already
+  -- generic over any {"all":[...],"friends":[...]} response, not
+  -- league-specific despite the name.
+  local dexLeaderboard = nil
+  local tilesLeaderboard = nil
+  local dexLeaderboardBusy = false
+  local tilesLeaderboardBusy = false
+
+  -- Tiles walked in the overworld THIS ACCOUNT has ever taken, across every
+  -- save - the mod's own counter for the SN RECORDS tiles-walked category,
+  -- since (confirmed via direct engine research before building this) there
+  -- is no field anywhere in game.save that tracks this; the only real
+  -- signal is counting real world.stepped events as they happen (see that
+  -- event's own wiring further down). Loaded from mod.save at game.ready
+  -- (falls back to 0 for a save that's never tracked this before) and
+  -- persisted back to mod.save on every single step - safe to do this
+  -- often since world.stepped is already bounded by real movement speed
+  -- (at most a few times a second), not a per-frame event.
+  --
+  -- This IS a per-save-slot count (mod.save's own scoping - see this
+  -- file's other mod.save comments), so it resets to 0 on a fresh save the
+  -- same way a brand new cartridge's own step count would. The SERVER side
+  -- (stats.php) is what makes the ACCOUNT-wide total in the leaderboard
+  -- resistant to a .sav re-import wiping this back to 0 on any one
+  -- save - see stats.php's own comment on tiles_walked's GREATEST() ratchet.
+  local tilesWalked = 0
 
   local function firePresencePing()
     if authState ~= "authed" or not myMap then return end
@@ -1522,6 +1651,22 @@ return function(mod)
     httpAsyncGet("league_leaderboard", "/league_leaderboard.php", { token = currentToken() or "" })
   end
 
+  -- Same on-demand pattern as fireLeagueLeaderboardFetch above - fired
+  -- lazily by SilphNetLeagueSign's own update(dt) the first time the
+  -- player switches to that category on the (now multi-category) SN
+  -- RECORDS sign, not kept on the background cycle.
+  fireDexLeaderboardFetch = function()
+    if authState ~= "authed" then return end
+    dexLeaderboardBusy = true
+    httpAsyncGet("dex_leaderboard", "/dex_leaderboard.php", { token = currentToken() or "" })
+  end
+
+  fireTilesLeaderboardFetch = function()
+    if authState ~= "authed" then return end
+    tilesLeaderboardBusy = true
+    httpAsyncGet("tiles_leaderboard", "/tiles_leaderboard.php", { token = currentToken() or "" })
+  end
+
   -- On-demand only - fired once when SilphNetFriendDetail opens, NOT on
   -- the 30s presence cycle. Unlike friends/pending/online-count/nearby,
   -- this is about ONE specific friend the player has chosen to look at
@@ -1557,6 +1702,7 @@ return function(mod)
       fields.money = statsFields.money
       fields.play_seconds = statsFields.playSeconds
       fields.party = statsFields.party
+      fields.tiles_walked = statsFields.tilesWalked
     end
     if activity then fields.activity = activity end
     statsUploadBusy = true
@@ -1937,6 +2083,70 @@ return function(mod)
       end
     end
     return n
+  end
+
+  -- Same dedup shape as countFriendsOnline above, minus the online-window
+  -- check - a plain count of DISTINCT accepted friends regardless of
+  -- online status, needed for the FIRST FRIEND/5 FRIENDS milestones
+  -- below. `friends` is keyed "account_id|game_version" (a friend with
+  -- more than one active save gets more than one row), so this can't
+  -- just be #friends - that would overcount a friend with two saves.
+  local function countDistinctFriends()
+    local seenPeople, n = {}, 0
+    for _, f in pairs(friends) do
+      if f.account_id and not seenPeople[f.account_id] then
+        seenPeople[f.account_id] = true
+        n = n + 1
+      end
+    end
+    return n
+  end
+
+  -- SN MILESTONES - small, entirely client-side/local social milestones,
+  -- unrelated to any leaderboard or server ranking (no bragging-rights
+  -- comparison against other players here, just personal firsts). Each
+  -- is a one-way flag in mod.save (never re-locked once unlocked, same
+  -- "only ever earned, never revoked" spirit as league_wins' own server-
+  -- side ratchet) - checked on the same ~30s cycle friends/nearby/
+  -- onlineCount already refresh on (see pumpPresenceTimer's own wiring),
+  -- so this costs nothing extra network-wise, purely local table scans
+  -- over data already in memory.
+  local MILESTONE_DEFS = {
+    { key = "first_friend",   label = "FIRST FRIEND" },
+    { key = "five_friends",   label = "5 FRIENDS" },
+    { key = "crowded",        label = "CROWDED" },
+    { key = "nearby_friend",  label = "FRIEND NEARBY" },
+    { key = "thousand_tiles", label = "1000 TILES" },
+  }
+  local function isMilestoneUnlocked(key)
+    local ok, v = pcall(function() return mod.save:get("milestone_" .. key) end)
+    return ok and v == true
+  end
+  local function unlockMilestone(key)
+    if isMilestoneUnlocked(key) then return end   -- one-way - never re-checked once true
+    pcall(function() mod.save:set("milestone_" .. key, true) end)
+  end
+  local function checkMilestones()
+    local friendCount = countDistinctFriends()
+    if friendCount >= 1 then unlockMilestone("first_friend") end
+    if friendCount >= 5 then unlockMilestone("five_friends") end
+    if tonumber(onlineCount) and tonumber(onlineCount) >= 10 then unlockMilestone("crowded") end
+    -- FRIEND NEARBY - someone in the CURRENT map's nearby list (see
+    -- `nearby`, refreshed on the same cycle) who's already an accepted
+    -- friend. Linear scan against `friends` rather than a lookup table -
+    -- both lists are small (one map's worth of people, one account's
+    -- friend list), so this is cheap even run every ~30s.
+    for _, p in ipairs(nearby) do
+      if p.account_id then
+        for _, f in pairs(friends) do
+          if f.account_id and tostring(f.account_id) == tostring(p.account_id) then
+            unlockMilestone("nearby_friend")
+            break
+          end
+        end
+      end
+    end
+    if tilesWalked >= 1000 then unlockMilestone("thousand_tiles") end
   end
 
   -- Reconciles the friend-marker set against `friends` + the current map -
@@ -3330,6 +3540,22 @@ return function(mod)
             -- already follow elsewhere in this file.
             mod.log:info("SilphNet: league leaderboard fetch failed: %s", tostring(body))
           end
+        elseif tag == "dex_leaderboard" then
+          dexLeaderboardBusy = false
+          if status == "OK" and jsonIsOk(body) then
+            local all, friendsList = parseLeagueLeaderboardJson(body)
+            dexLeaderboard = { all = all, friends = friendsList }
+          else
+            mod.log:info("SilphNet: dex leaderboard fetch failed: %s", tostring(body))
+          end
+        elseif tag == "tiles_leaderboard" then
+          tilesLeaderboardBusy = false
+          if status == "OK" and jsonIsOk(body) then
+            local all, friendsList = parseLeagueLeaderboardJson(body)
+            tilesLeaderboard = { all = all, friends = friendsList }
+          else
+            mod.log:info("SilphNet: tiles leaderboard fetch failed: %s", tostring(body))
+          end
         else
           handleHttpResult(tag, status, body)
         end
@@ -3358,6 +3584,11 @@ return function(mod)
       if not pendingBusy then firePendingFetch() end
       if not onlineCountBusy then fireOnlineCountFetch() end
       if not nearbyBusy then fireNearbyFetch() end
+      -- Checked here, not on its own timer - friends/nearby/onlineCount
+      -- are all freshly re-fetched right above on this exact cycle, so
+      -- there's no fresher moment to check milestones against than this
+      -- one already-scheduled tick.
+      pcall(checkMilestones)
     end
     -- pendingActivityQueue is filled by the real pokemon.caught event
     -- handler (see wiring section), not polled here - this just drains
@@ -3378,6 +3609,14 @@ return function(mod)
     if sinceStats >= STATS_INTERVAL or activity then
       if not statsUploadBusy then
         local snap = (sinceStats >= STATS_INTERVAL) and readStatsSnapshot() or nil
+        -- Badge/level-up/league-win activity detection runs on this SAME
+        -- read, before it's uploaded - see detectStatsActivity's own
+        -- comment for why this is poll-based. Queuing here means a
+        -- detected change can ride along on THIS SAME upload if the
+        -- queue was empty a moment ago, rather than always waiting for a
+        -- separate round trip.
+        if snap then pcall(detectStatsActivity, snap) end
+        activity = pendingActivityQueue[1]
         if snap or activity then
           fireStatsUpload(snap, activity)
           if sinceStats >= STATS_INTERVAL then sinceStats = 0 end
@@ -3392,6 +3631,7 @@ return function(mod)
     math.randomseed(os.time() + math.floor((os.clock() or 0) * 1000))
     myName = resolveMyName()
     gameVersion = resolveGameVersion()
+    tilesWalked = tonumber(mod.save:get("tiles_walked")) or 0
     beginAuth()
   end)
 
@@ -3480,6 +3720,16 @@ return function(mod)
     -- core.update hook below (see its own comment for why) - this handler
     -- now only tracks the player's own position, which is correctly
     -- step-gated (there's nothing to update here while standing still).
+    --
+    -- SN RECORDS tiles-walked counter - see tilesWalked's own declaration
+    -- comment for why this is the only way to track it. One real step is
+    -- exactly one tile, so this is a plain increment, no delta/distance
+    -- math needed. pcall-wrapped since mod.save:set is a real I/O call
+    -- elsewhere in this file (see currentToken/sessionToken's own history
+    -- this same session) - a failed write here should never be allowed to
+    -- break movement tracking itself.
+    tilesWalked = tilesWalked + 1
+    pcall(function() mod.save:set("tiles_walked", tilesWalked) end)
   end)
 
   -- Reported bug: standing still in the overworld for more than a few
@@ -3641,6 +3891,10 @@ return function(mod)
         mod.ui.insertBefore(items, "QUIT", { label = "SN RECOVER ACCT",
           onSelect = function() mod.ui.push(g, "SilphNetRecoverAcct") end })
       end
+      -- Inserted before SN ABOUT (not after) so About stays the last row,
+      -- same ordering rule every row above it already follows.
+      mod.ui.insertBefore(items, "QUIT", { label = "SN MILESTONES",
+        onSelect = function() mod.ui.push(g, "SilphNetMilestones") end })
       mod.ui.insertBefore(items, "QUIT", { label = "SN ABOUT",
         onSelect = function() mod.ui.push(g, "SilphNetAbout") end })
     end)
@@ -3697,6 +3951,47 @@ return function(mod)
           -- long real-world input, not its own version string growing.
           Font.draw("THANKS FOR", 16, 112)
           Font.draw(("PLAYING! V" .. tostring(mod.version or "?")):sub(1, 16), 16, 120)
+          Font.draw("B:BACK", 16, 128)
+        end
+        return self
+      end,
+    })
+  end)
+
+  -- SN MILESTONES - read-only, no fetch, nothing that can be
+  -- "CHECKING..." - same simplicity as SilphNetAbout right above this,
+  -- since every milestone is checked/unlocked entirely locally (see
+  -- checkMilestones' own comment). All 5 entries plus a title/count line
+  -- fit comfortably in one static screen with real room to spare, so no
+  -- paging is needed here, unlike every leaderboard-style screen in this
+  -- file.
+  pcall(function()
+    mod.content.screens:register("SilphNetMilestones", {
+      new = function(g)
+        local Font = mod.ui.Font
+        local self = { game = g, isOpaque = true }
+        function self:update(dt)
+          if g.input:wasPressed("b") then g.stack:pop() end
+        end
+        function self:draw()
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("SN MILESTONES", 16, 8)
+          local unlocked = 0
+          for _, def in ipairs(MILESTONE_DEFS) do
+            if isMilestoneUnlocked(def.key) then unlocked = unlocked + 1 end
+          end
+          Font.draw(("UNLOCKED " .. unlocked .. "/" .. #MILESTONE_DEFS):sub(1, 16), 16, 16)
+          for i, def in ipairs(MILESTONE_DEFS) do
+            -- "X " for unlocked, "- " for not yet - two real ASCII
+            -- characters, not a checkmark glyph (this font's real glyph
+            -- set has never been assumed beyond what's already confirmed
+            -- elsewhere in this file - see GENDER_MALE/GENDER_FEMALE's own
+            -- comment on why glyphs are only ever used once actually
+            -- confirmed against the engine's real Font.lua, and a
+            -- checkmark hasn't been).
+            local mark = isMilestoneUnlocked(def.key) and "X " or "- "
+            Font.draw((mark .. def.label):sub(1, 16), 16, 24 + i * 8)
+          end
           Font.draw("B:BACK", 16, 128)
         end
         return self
@@ -4092,27 +4387,79 @@ return function(mod)
     })
   end)
 
-  -- League leaderboard sign talk screen - pushed by TEXT_SILPHNET_LEAGUE_SIGN
-  -- near the Elite Four entrance (see spawnLeagueSign/LEAGUE_SIGN_MAP_ID).
-  -- Two independent axes, same "two axes on one screen" convention
-  -- SilphNetOnline already established (LEFT/RIGHT there cycles versions,
-  -- UP/DOWN cycles players within one) - here LEFT/RIGHT flips between
-  -- the ALL PLAYERS and FRIENDS pages, UP/DOWN pages through whichever
-  -- list is currently showing, and SELECT toggles ascending/descending
-  -- (an already-established "extra button beyond A/B/D-pad for a
-  -- secondary per-screen action" convention - SilphNetFriends already
-  -- uses SELECT for its own reset-confirm shortcut).
+  -- SN RECORDS sign talk screen (still registered as "SilphNetLeagueSign" -
+  -- unchanged screen id, so TEXT_SILPHNET_LEAGUE_SIGN's existing push_screen
+  -- hook needs no change - only what's drawn/tracked inside it grew) -
+  -- pushed near the Elite Four entrance (see spawnLeagueSign/
+  -- LEAGUE_SIGN_MAP_ID). Originally a single league-clears leaderboard;
+  -- now cycles through THREE categories (league clears / dex completion /
+  -- tiles walked) on the same one sign, via A - deliberately reusing this
+  -- one already-placed sign instead of adding two more NPCs to place, each
+  -- with its own chance of landing on a statue or failing to find a safe
+  -- tile (see the gym/league sign placement search's own "known"
+  -- limitations) - one physical sign carrying three "records" pages is a
+  -- strictly smaller footprint of things that can go wrong than three
+  -- separate signs would be.
+  --
+  -- Three independent controls, same "more than one axis on one screen"
+  -- convention SilphNetOnline already established: A cycles which
+  -- category is showing (league/dex/tiles), LEFT/RIGHT flips between the
+  -- ALL PLAYERS and FRIENDS pages (per category), UP/DOWN pages through
+  -- whichever list is currently showing, and SELECT toggles ascending/
+  -- descending - all four exactly as before for league clears, now shared
+  -- identically by the two new categories rather than each getting its own
+  -- bespoke control scheme.
   --
   -- Sorting is entirely client-side (see league_leaderboard.php's own
   -- comment - the server only ever returns ONE order, descending) -
   -- ascending is just that same array read back to front into a fresh
   -- table, never a re-sort and never a second request, so toggling is
-  -- instant regardless of how many rows came back.
+  -- instant regardless of how many rows came back. Same for dex/tiles -
+  -- dex_leaderboard.php/tiles_leaderboard.php both also only ever return
+  -- one (descending) order.
   --
   -- Only ever displays server-computed names/trainer ids/numbers - no
   -- free text of any kind, same no-chat/no-DM policy as the gym sign
   -- screen above.
   pcall(function()
+    -- Ordered so A cycles league -> dex -> tiles -> back to league. Titles
+    -- are all within the 16-char/line budget every screen in this file
+    -- respects ("SN LEAGUE CLEARS" is exactly 16; the other two are
+    -- shorter). noDataLabel is shown once a fetch has genuinely come back
+    -- empty (not "still loading" - see the CHECKING... branch below, which
+    -- is shared across all three categories since it means the same thing
+    -- for each: no response yet at all).
+    local RECORDS_CATEGORIES = {
+      { key = "league", title = "SN LEAGUE CLEARS", ownLabel = "YOUR CLEARS", noDataLabel = "NO CLEARS YET" },
+      { key = "dex",     title = "SN DEX RECORD",    ownLabel = "YOUR DEX",    noDataLabel = "NO DEX DATA YET" },
+      { key = "tiles",   title = "SN TILES WALKED",  ownLabel = "YOUR TILES",  noDataLabel = "NO TILES YET" },
+    }
+
+    local function recordsBoard(key)
+      if key == "league" then return leagueLeaderboard end
+      if key == "dex" then return dexLeaderboard end
+      return tilesLeaderboard
+    end
+    local function recordsBusy(key)
+      if key == "league" then return leagueLeaderboardBusy end
+      if key == "dex" then return dexLeaderboardBusy end
+      return tilesLeaderboardBusy
+    end
+    local function recordsFetch(key)
+      if key == "league" then fireLeagueLeaderboardFetch()
+      elseif key == "dex" then fireDexLeaderboardFetch()
+      else fireTilesLeaderboardFetch() end
+    end
+    -- dex rows carry "pct" (a 0-100 int - see dex_leaderboard.php),
+    -- league/tiles rows both carry "total" (a plain count - deliberately
+    -- the SAME field name on both server endpoints so this one function
+    -- covers both without a third branch).
+    local function recordsRowLine(key, row)
+      if key == "dex" then return "DEX " .. tostring(tonumber(row.pct) or 0) .. "%" end
+      if key == "tiles" then return "TILES " .. tostring(tonumber(row.total) or 0) end
+      return "CLEARS " .. tostring(tonumber(row.total) or 0)
+    end
+
     mod.content.screens:register("SilphNetLeagueSign", {
       new = function(g)
         local Font = mod.ui.Font
@@ -4121,55 +4468,92 @@ return function(mod)
         -- already uses for onlineByVersion - fired every time this
         -- screen opens (not just once, ever), so revisiting the sign
         -- later in the same session shows updated totals rather than a
-        -- permanently stale first snapshot.
+        -- permanently stale first snapshot. Only the FIRST category
+        -- (league, catIndex 1) needs firing here - the other two fetch
+        -- lazily from update(dt) the first time the player actually
+        -- switches to them, same as this whole sign originally worked for
+        -- league alone.
         if not leagueLeaderboardBusy then fireLeagueLeaderboardFetch() end
-        -- Own league-clear count, shown on this screen per the owner's
-        -- request ("show somewhere your own amount of league wins").
+        -- Own value for whichever category is currently showing, shown on
+        -- this screen per the owner's original request for league clears
+        -- ("show somewhere your own amount of league wins") - extended to
+        -- the same treatment for dex/tiles once those existed too.
         --
-        -- Deliberately NOT the local save's own #save.hallOfFame/
-        -- save.hallOfFame.count - that's scoped to THIS ONE cartridge
-        -- only, while every other number on this screen (and the
-        -- leaderboard rank itself) is the COMBINED total across every
-        -- game_version this account has ever uploaded (see
-        -- league_leaderboard.php's own comment on why "collapse across
-        -- saves" is the right call for a leaderboard specifically). A
-        -- player who cleared the league on RED but is standing at this
+        -- Deliberately NOT read from the local save alone where a
+        -- combined-across-saves total exists (league/tiles) - that's
+        -- scoped to THIS ONE cartridge only, while every other number on
+        -- this screen (and the leaderboard rank itself) is the COMBINED
+        -- total across every game_version this account has ever uploaded
+        -- (see league_leaderboard.php's own comment on why "collapse
+        -- across saves" is the right call for a leaderboard specifically).
+        -- A player who cleared the league on RED but is standing at this
         -- sign on a fresh YELLOW save would otherwise see "YOUR CLEARS 0"
         -- right next to a leaderboard that already credits them with 1 -
         -- confusingly inconsistent, and exactly what was reported back
-        -- ("it says 0, but I have beaten the league" - true for the
-        -- save they were standing in, not for their account overall).
+        -- originally for league clears ("it says 0, but I have beaten the
+        -- league" - true for the save they were standing in, not for
+        -- their account overall). Dex completion is the one exception -
+        -- see its own branch below for why that one genuinely IS scoped
+        -- to a single save's own best reading rather than combined.
         --
-        -- So this reads the SAME combined number every other row on this
-        -- screen already comes from: look the caller's own accountId up
-        -- inside leagueLeaderboard.all (already fetched for the ALL
-        -- PLAYERS page, no second request needed) once it's arrived.
-        -- Falls back to the local single-save reading only until that
-        -- fetch has come back at least once, so this screen never shows
-        -- a blank/dash before the network round trip completes.
-        local function myLeagueClears()
-          if leagueLeaderboard and leagueLeaderboard.all then
-            for _, row in ipairs(leagueLeaderboard.all) do
+        -- So league/tiles both look the caller's own accountId up inside
+        -- that category's already-fetched "all" list (no second request
+        -- needed) once it's arrived, falling back to a local reading only
+        -- until that fetch has come back at least once, so this screen
+        -- never shows a blank/dash before the network round trip
+        -- completes.
+        local function myRecordValue(key)
+          local board = recordsBoard(key)
+          if board and board.all then
+            for _, row in ipairs(board.all) do
               if row.account_id and accountId and tostring(row.account_id) == tostring(accountId) then
+                if key == "dex" then return tonumber(row.pct) or 0 end
                 return tonumber(row.total) or 0
               end
             end
-            -- Fetched, but this account has a combined total of 0 (never
-            -- cleared on ANY save) - league_leaderboard.php excludes 0
-            -- totals from the list entirely, so "not found" here
-            -- genuinely means 0, not "still loading."
+            -- Fetched, but this account has a combined total/best pct of 0
+            -- (never cleared/caught anything on ANY save) - both
+            -- leaderboard endpoints exclude 0 entirely from their lists,
+            -- so "not found" here genuinely means 0, not "still loading."
             return 0
           end
-          -- Leaderboard hasn't come back yet - best available answer is
-          -- this one save's own count, same as before this fix.
+          -- Leaderboard hasn't come back yet.
+          if key == "tiles" then
+            -- Already in memory, no readStatsSnapshot() round trip needed -
+            -- this IS the account's current-save reading (see tilesWalked's
+            -- own declaration comment on why it's per-save-slot, same as
+            -- every other fallback here until the combined total arrives).
+            return tilesWalked
+          end
+          if key == "dex" then
+            -- Dex completion is scoped to THIS save's own best reading
+            -- even once the leaderboard arrives (see the branch that
+            -- handles the fetched case above returning tonumber(row.pct)
+            -- straight from the server, which is ALREADY this account's
+            -- best-across-saves number - dex_leaderboard.php computes
+            -- "best single save", not "current save", so there's nothing
+            -- further to reconcile here; this fallback branch is only
+            -- for the brief window before that fetch has ever completed).
+            local pct = 0
+            pcall(function()
+              local snap = readStatsSnapshot()
+              local total = isGen2(gameVersion) and 251 or 151
+              if snap and snap.pokedexCaught then
+                pct = math.floor((snap.pokedexCaught / total) * 100 + 0.5)
+              end
+            end)
+            return pct
+          end
           local mine = 0
           pcall(function() mine = readStatsSnapshot().leagueWins or 0 end)
           return mine
         end
-        local self = { game = g, isOpaque = true, page = 1, index = 1, sortAsc = false }
+        local self = { game = g, isOpaque = true, catIndex = 1, page = 1, index = 1, sortAsc = false }
+        local function currentCategory() return RECORDS_CATEGORIES[self.catIndex] end
         local function currentList()
-          if not leagueLeaderboard then return nil end
-          local base = (self.page == 1) and leagueLeaderboard.all or leagueLeaderboard.friends
+          local board = recordsBoard(currentCategory().key)
+          if not board then return nil end
+          local base = (self.page == 1) and board.all or board.friends
           if not base or not self.sortAsc then return base end
           local rev = {}
           for i = #base, 1, -1 do rev[#rev + 1] = base[i] end
@@ -4178,6 +4562,16 @@ return function(mod)
         function self:update(dt)
           pcall(drainHttpResults)
           local input = g.input
+          if input:wasPressed("a") then
+            self.catIndex = (self.catIndex % #RECORDS_CATEGORIES) + 1
+            self.page = 1
+            self.index = 1
+          end
+          -- Lazy fetch, same reasoning as new()'s own comment - only
+          -- fires the first time a category is actually viewed, and only
+          -- if it doesn't already have data and isn't already in flight.
+          local key = currentCategory().key
+          if recordsBoard(key) == nil and not recordsBusy(key) then recordsFetch(key) end
           if input:wasPressed("left") or input:wasPressed("right") then
             self.page = (self.page == 1) and 2 or 1
             self.index = 1
@@ -4204,19 +4598,20 @@ return function(mod)
           -- hints right on top of the box's own bottom border instead of
           -- below it, which is what "the nav bits are chopped off" was.
           Font.drawBox(0, 0, 20, 18)
+          local cat = currentCategory()
           -- A persistent top-line title makes clear what this whole
-          -- screen is about even before reading any row - the ALL
-          -- PLAYERS/FRIENDS toggle alone didn't say "league clears"
-          -- anywhere, which was the "doesn't clearly say its league wins"
-          -- report. "SN LEAGUE CLEARS" is 16 chars exactly.
-          Font.draw("SN LEAGUE CLEARS", 16, 8)
+          -- screen is about even before reading any row - now doubles as
+          -- the category indicator, since it changes with A.
+          Font.draw(cat.title, 16, 8)
           local subtitle = (self.page == 1) and "ALL PLAYERS" or "FRIENDS"
           Font.draw(("- " .. subtitle .. " -"):sub(1, 16), 16, 16)
-          -- Own clear count, always visible regardless of which list/sort
-          -- is showing - per the owner's request to surface this
-          -- somewhere on this screen.
-          Font.draw(("YOUR CLEARS " .. tostring(myLeagueClears())):sub(1, 16), 16, 32)
-          if leagueLeaderboard == nil then
+          -- Own value, always visible regardless of which list/sort is
+          -- showing - per the owner's original request to surface this
+          -- for league clears, now shared by dex/tiles too.
+          local ownSuffix = (cat.key == "dex") and "%" or ""
+          Font.draw((cat.ownLabel .. " " .. tostring(myRecordValue(cat.key)) .. ownSuffix):sub(1, 16), 16, 32)
+          local board = recordsBoard(cat.key)
+          if board == nil then
             -- Same "nil means haven't heard back yet" convention as
             -- onlineByVersion/onlineCount elsewhere in this file.
             Font.draw("CHECKING...", 16, 56)
@@ -4225,7 +4620,7 @@ return function(mod)
             local n = list and #list or 0
             if self.index > n then self.index = 1 end
             if n == 0 then
-              Font.draw("NO CLEARS YET", 16, 56)
+              Font.draw(cat.noDataLabel, 16, 56)
             else
               local row = list[self.index]
               -- The TRUE rank (1 = top scorer overall) is always
@@ -4263,12 +4658,12 @@ return function(mod)
               Font.draw(("RANK " .. rank .. " OF " .. n):sub(1, 16), 16, 56)
               Font.draw((row.name or "?"):sub(1, 16), 16, 72)
               Font.draw("ID   " .. (row.trainer_id or "-----"), 16, 80)
-              Font.draw(("CLEARS " .. tostring(row.total or 0)):sub(1, 16), 16, 88)
+              Font.draw(recordsRowLine(cat.key, row):sub(1, 16), 16, 88)
               if n > 1 then Font.draw("UD:PAGE", 16, 104) end
             end
           end
-          Font.draw("LR:LIST SEL:SORT", 16, 120)
-          Font.draw("B:BACK", 16, 128)
+          Font.draw("A:STAT LR:LIST", 16, 120)
+          Font.draw("SEL:SORT B:BACK", 16, 128)
         end
         return self
       end,

@@ -300,3 +300,25 @@ ALTER TABLE friend_stats ADD COLUMN badges_mask SMALLINT UNSIGNED NOT NULL DEFAU
 ALTER TABLE presence DROP INDEX uniq_account;
 ALTER TABLE presence ADD UNIQUE KEY uniq_account_version (account_id, game_version);
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2026-09-01: friend_stats.tiles_walked (SN RECORDS tiles-walked leaderboard)
+-- Needed if your `friend_stats` table was created BEFORE tiles_walked
+-- existed in schema.sql. If you're setting up SilphNet fresh, schema.sql
+-- already creates this column and you can skip this whole block.
+-- ---------------------------------------------------------------------------
+
+-- Step 1: check if the column is missing before running step 2 - if this
+-- returns a row, tiles_walked already exists and you should skip step 2.
+--
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema = DATABASE() AND table_name = 'friend_stats' AND column_name = 'tiles_walked';
+--
+-- (empty result = column is missing, continue with step 2 below)
+
+-- Step 2: add the column, defaulting every existing row to 0 - safe to run
+-- while players are actively uploading stats, since stats.php's own
+-- upsert doesn't require this column to already exist for its OTHER
+-- fields to keep working.
+ALTER TABLE friend_stats ADD COLUMN tiles_walked INT UNSIGNED NOT NULL DEFAULT 0 AFTER party;
+-- ---------------------------------------------------------------------------

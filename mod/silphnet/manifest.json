@@ -1,7 +1,7 @@
 {
   "id": "silphnet",
   "name": "SilphNet",
-  "version": "1.14.5",
+  "version": "1.15.0",
   "entry": "main.lua",
   "author": "Ash",
   "description": "Log in with a name and password (get a unique Trainer ID too), add friends in-game by Trainer ID, and see their last-known positions as static map markers plus a friends list (online/offline, map, tile, time-ago). Every gym now has its own sign listing which of your accepted friends already hold that badge, and a league leaderboard sign near the Elite Four entrance ranks total league clears (ALL PLAYERS / FRIENDS, ascending or descending). Plain-HTTP presence reported every ~30s - no server process required beyond ordinary PHP+MySQL hosting. No live/real-time movement, no free-text chat by design.",
