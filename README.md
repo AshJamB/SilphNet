@@ -105,6 +105,7 @@ server/
       public_stat_by_version.php  PUBLIC, unauthenticated - one stat's per-player ranking within a single game version, for the website's drilldown modal
       report_bug.php              PUBLIC, unauthenticated - the website's "Report a bug" form; files a real GitHub issue on the private repo (honeypot + per-IP rate limit, no login required)
 archive/tcp_relay_retired/  the old real-time relay - retired, kept for reference
+tools/rebuild-dist.ps1  local fallback for repackaging dist/silphnet.zip from mod/silphnet/ (repackage + byte-verify, best-effort Lua syntax check) - for whenever Claude's own sandbox tools aren't available; see the script's own header comment
 experiments/http_test/      the throwaway diagnostic that confirmed plain HTTP works from the game
 assets/                  images used in this README (banner, etc.)
 .github/workflows/       the release pipeline - publishes a GitHub Release + zip on every push to mod/silphnet/

@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.16.3)
+-- SilphNet - async presence + friends (v1.16.4)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -1302,6 +1302,40 @@ return function(mod)
   -- party/playTime (encodePartySnapshot/readPlaySeconds) and pokedex.seen
   -- are already generation-agnostic - same field names both sides - so they
   -- need no branch here.
+  -- Tiles walked in the overworld THIS ACCOUNT has ever taken, across every
+  -- save - the mod's own counter for the SN RECORDS tiles-walked category,
+  -- since (confirmed via direct engine research before building this) there
+  -- is no field anywhere in game.save that tracks this; the only real
+  -- signal is counting real world.stepped events as they happen (see that
+  -- event's own wiring further down). Loaded from mod.save at game.ready
+  -- (falls back to 0 for a save that's never tracked this before) and
+  -- persisted back to mod.save on every single step - safe to do this
+  -- often since world.stepped is already bounded by real movement speed
+  -- (at most a few times a second), not a per-frame event.
+  --
+  -- This IS a per-save-slot count (mod.save's own scoping - see this
+  -- file's other mod.save comments), so it resets to 0 on a fresh save the
+  -- same way a brand new cartridge's own step count would. The SERVER side
+  -- (stats.php) is what makes the ACCOUNT-wide total in the leaderboard
+  -- resistant to a .sav re-import wiping this back to 0 on any one
+  -- save - see stats.php's own comment on tiles_walked's GREATEST() ratchet.
+  --
+  -- Declared HERE, before readStatsSnapshot() below (not down near
+  -- dexLeaderboard/tilesLeaderboard where it used to sit) - a real bug,
+  -- not a style choice: readStatsSnapshot references tilesWalked by name,
+  -- and Lua only resolves a name to a `local` declared BEFORE it in the
+  -- source, not one declared later even in the same enclosing scope. With
+  -- the old declaration order, readStatsSnapshot's own `tilesWalked`
+  -- reference resolved to an undeclared GLOBAL (always nil) instead of
+  -- this local, so every stats upload silently sent no tiles_walked value
+  -- at all - other stats (badges, money, etc, all declared/read the
+  -- ordinary way) kept working fine, which is exactly why this stayed
+  -- stuck at 0 while everything else updated normally. The exact same
+  -- forward-declaration ordering bug this file has hit more than once
+  -- before (see the README's own bugfix history) - caught here via a
+  -- real on-device report, not proactively.
+  local tilesWalked = 0
+
   local function readStatsSnapshot()
     local save = game and game.save
     if not save then return nil end
@@ -1564,25 +1598,6 @@ return function(mod)
   local tilesLeaderboard = nil
   local dexLeaderboardBusy = false
   local tilesLeaderboardBusy = false
-
-  -- Tiles walked in the overworld THIS ACCOUNT has ever taken, across every
-  -- save - the mod's own counter for the SN RECORDS tiles-walked category,
-  -- since (confirmed via direct engine research before building this) there
-  -- is no field anywhere in game.save that tracks this; the only real
-  -- signal is counting real world.stepped events as they happen (see that
-  -- event's own wiring further down). Loaded from mod.save at game.ready
-  -- (falls back to 0 for a save that's never tracked this before) and
-  -- persisted back to mod.save on every single step - safe to do this
-  -- often since world.stepped is already bounded by real movement speed
-  -- (at most a few times a second), not a per-frame event.
-  --
-  -- This IS a per-save-slot count (mod.save's own scoping - see this
-  -- file's other mod.save comments), so it resets to 0 on a fresh save the
-  -- same way a brand new cartridge's own step count would. The SERVER side
-  -- (stats.php) is what makes the ACCOUNT-wide total in the leaderboard
-  -- resistant to a .sav re-import wiping this back to 0 on any one
-  -- save - see stats.php's own comment on tiles_walked's GREATEST() ratchet.
-  local tilesWalked = 0
 
   local function firePresencePing()
     if authState ~= "authed" or not myMap then return end
