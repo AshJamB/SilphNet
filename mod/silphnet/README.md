@@ -22,22 +22,20 @@ HTTPS, which is why it works **on Android** too (LÖVE 11 has no TLS there).
      from any device. A session token is cached so you don't retype it
      every launch.
 
-Then load a save and walk around. Open **START** to see `SN <name>`
-once logged in, or a status message otherwise (kept short — "SN", not
-"SILPHNET" — since some third-party UI mods truncate long Start Menu
-rows rather than adding an ellipsis). Select that row for the status
-screen: **A** opens the friends list once logged in (or retries login
-before that), **START** re-authenticates, **SELECT** resets the cached
-login on this device, **B** goes back. Two more top-level rows sit below
-it — **SN NEARBY** (everyone else on your current map) and **SN ONLINE**
-(everyone online across the whole service, by game version) — plus **SN
-RECOVER ACCT**, which only appears when this account has no recovery
-email on file and disappears on its own once one's set (kept top-level
-rather than tucked into a submenu, since it's rare but time-critical). A
-final **SN MORE** row opens a small submenu for the rows that are
-always visible once logged in: **MILESTONES**, **REPORT BUG** (points
-to the "Report a bug" button on the website's homepage — no in-game
-text entry, see below), and **ABOUT**.
+Then load a save and walk around. Open **START** to see one
+**SILPHNET** row. Selecting it opens a single home screen listing every
+SilphNet destination (UP/DOWN to pick, **A** to open, **B** to back
+out): **STATUS** (shows `<name>` once logged in, or a status message
+otherwise; **A** opens the friends list once logged in, or retries
+login before that; **START** re-authenticates; **SELECT** resets the
+cached login on this device), **NEARBY** (everyone else on your current
+map), **ONLINE** (everyone online across the whole service, by game
+version), **RECORDS** (opens the same league/dex/tiles leaderboard the
+sign near the Elite Four entrance shows), **MILESTONES**, **ABOUT**,
+**REPORT BUG** (points to the "Report a bug" button on the website's
+homepage — no in-game text entry, see below), and — conditionally, only
+while this account has no recovery email on file, disappearing on its
+own once one's set — **RECOVER ACCT**.
 
 ## Notes
 
@@ -69,10 +67,10 @@ text entry, see below), and **ABOUT**.
   detected by diffing successive stats snapshots, since neither a
   badge-earned event nor a stable/documented level-up event exists in
   the engine's mod API).
-- SN MILESTONES tracks five small, personal (not server-ranked) social
+- MILESTONES tracks five small, personal (not server-ranked) social
   firsts — see the Start Menu walkthrough above.
-- SN REPORT BUG (inside SN MORE) points to the "Report a bug" button on
-  the website's homepage rather than adding an in-game text box — the
-  form files a real issue on the GitHub repo directly, asks for no name
-  or email, and is guarded by a honeypot field plus a per-IP rate limit
-  rather than requiring a SilphNet login.
+- REPORT BUG points to the "Report a bug" button on the website's
+  homepage rather than adding an in-game text box — the form files a
+  real issue on the GitHub repo directly, asks for no name or email, and
+  is guarded by a honeypot field plus a per-IP rate limit rather than
+  requiring a SilphNet login.
