@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.16.4)
+-- SilphNet - async presence + friends (v1.17.1)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -3837,78 +3837,23 @@ return function(mod)
       -- very first Start Menu open after a completed login already shows
       -- the correct name.
       pcall(drainHttpResults)
-      mod.ui.insertBefore(items, "QUIT", { label = statusLabel(),
-        onSelect = function() mod.ui.push(g, "SilphNetStatus") end })
-      -- A second, separate Start Menu row for Nearby - rather than
-      -- cramming every new feature into the one SILPHNET row (or bolting
-      -- a mode toggle onto the Friends screen, which is what an earlier
-      -- version of this did before it was simplified back out), each
-      -- major feature gets its own row as the mod grows. "SN" (not the
-      -- full "SILPHNET") keeps this within the same conservative label
-      -- length every other row here uses. Anchored on "QUIT" too, same
-      -- as the row above, so both SilphNet rows land together just above
-      -- it regardless of what other mods insert between them.
-      mod.ui.insertBefore(items, "QUIT", { label = "SN NEARBY",
-        onSelect = function() mod.ui.push(g, "SilphNetNearby") end })
-      -- Third Start Menu row for About - moved here from the mod
-      -- manager's OPTIONS screen (see removed ui.options.rows hook
-      -- below this comment used to sit above), which is where an
-      -- earlier version of this put it on the reasoning that the
-      -- in-game GB screen was already at its 16-char/144px budget.
-      -- Reported on-device as a real bug, not a design tradeoff:
-      -- selecting "ABOUT SILPHNET" from the options screen closed the
-      -- Start Menu/options UI entirely rather than opening the About
-      -- screen - mod.ui.push(g, "SilphNetAbout") pushing a genuine
-      -- gameplay-style screen onto a stack the mod manager's own
-      -- options UI wasn't necessarily expecting to receive a push from,
-      -- unlike the Start Menu (an established, already-working push
-      -- site for SilphNetStatus/SilphNetNearby above). Moving About to
-      -- its own Start Menu row - the exact same site the two rows above
-      -- already use successfully - sidesteps that entirely rather than
-      -- trying to debug the options screen's own push handling.
-      -- Global (self-inclusive) online-players row - moved here from the
-      -- status screen's A:FRIENDS hint line, which now shows a
-      -- friends-only count instead (see countFriendsOnline()).
-      -- Deliberately its own separate row, not folded onto any of the
-      -- two above - the whole reason this moved at all was that the
-      -- friends-list-adjacent hint line was easy to misread as a
-      -- friends-online count when it was really global and
-      -- self-inclusive, so this stays on a screen that has nothing to do
-      -- with friends at all.
+      -- v1.17.1: Start Menu consolidation. This used to insert up to 5
+      -- separate rows here (STATUS/NEARBY/ONLINE/RECOVER ACCT/MORE, with
+      -- MORE itself opening a further ABOUT/MILESTONES submenu) - "the
+      -- main menu is now getting full of SN stuff" was already the
+      -- complaint that produced SN MORE in the first place, and it kept
+      -- growing from there. Everything now lives one level down, inside
+      -- SilphNetHome (registered below), reached through this single row.
       --
-      mod.ui.insertBefore(items, "QUIT", { label = "SN ONLINE",
-        onSelect = function() mod.ui.push(g, "SilphNetOnline") end })
-      -- SN RECOVER ACCT stays its OWN top-level row, conditional on
-      -- hasEmail == false - deliberately NOT folded into SN MORE below.
-      -- This row is self-removing: the moment the account gets a
-      -- recovery email on file (via the website), it disappears from
-      -- the Start Menu on its own, so unlike About/Milestones it's never
-      -- permanent clutter for the vast majority of players who never see
-      -- it at all. Burying it inside SN MORE would only ever cost the
-      -- one player who's actually locked out - exactly the moment an
-      -- extra menu layer hurts most - for a decluttering benefit nobody
-      -- else would even notice, since it's already invisible to everyone
-      -- who doesn't need it.
-      if hasEmail == false then
-        mod.ui.insertBefore(items, "QUIT", { label = "SN RECOVER ACCT",
-          onSelect = function() mod.ui.push(g, "SilphNetRecoverAcct") end })
-      end
-      -- SN MORE - a single row opening a small submenu (About /
-      -- Milestones), rather than each of those getting its own top-level
-      -- Start Menu row. Reported directly as a real usability problem,
-      -- not a design nitpick: this project's own "each major feature
-      -- gets its own row" convention (see SN NEARBY's comment above) was
-      -- fine while there were 2-3 SilphNet rows, but by the time
-      -- MILESTONES/ABOUT were both separate rows on top of
-      -- STATUS/NEARBY/ONLINE, the Start Menu had grown to 5-6 SilphNet
-      -- rows - "the main menu is now getting full of SN stuff." STATUS,
-      -- NEARBY, and ONLINE stay top-level (core, frequently-used
-      -- gameplay features); About/Milestones are both comparatively
-      -- low-frequency/informational (and, unlike Recover Acct, ALWAYS
-      -- visible once logged in - real, permanent clutter, not a rare
-      -- conditional row), so those two are the ones that moved.
-      mod.ui.insertBefore(items, "QUIT", { label = "SN MORE",
-        onSelect = function() mod.ui.push(g, "SilphNetMore") end })
+      -- The row's label is still the live statusLabel() (e.g. "SN ASHJAM",
+      -- "SN SET NAME/PASS", "SN LOGIN FAIL"), NOT a static "SILPHNET" -
+      -- that glanceable login-state readout is genuinely useful information
+      -- players currently get without opening anything, and folding
+      -- everything behind one row shouldn't cost them that too. The literal
+      -- word "SILPHNET" is instead the title drawn inside SilphNetHome
+      -- itself, so it's still the first thing you see once you open it.
+      mod.ui.insertBefore(items, "QUIT", { label = statusLabel(),
+        onSelect = function() mod.ui.push(g, "SilphNetHome") end })
     end)
     return nextFn(g, items)
   end)
@@ -3981,18 +3926,38 @@ return function(mod)
   -- rare, unlike About/Milestones which are permanent, always-visible
   -- clutter once logged in.
   pcall(function()
-    mod.content.screens:register("SilphNetMore", {
+    mod.content.screens:register("SilphNetHome", {
       new = function(g)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true, index = 1 }
+        -- Everything the old 5-row Start Menu spread used to open,
+        -- flattened into one list. RECORDS pushes SilphNetLeagueSign
+        -- directly - that screen's new(g) only ever reads the game
+        -- object (same as every screen here), so it opens fine from the
+        -- menu, not just from the physical sign NPC it was originally
+        -- built for. RECOVER ACCT is the same self-removing conditional
+        -- row it always was, just appended here instead of top-level.
         local function items()
           local list = {}
+          list[#list + 1] = { label = "STATUS", screen = "SilphNetStatus" }
+          list[#list + 1] = { label = "NEARBY", screen = "SilphNetNearby" }
+          list[#list + 1] = { label = "ONLINE", screen = "SilphNetOnline" }
+          list[#list + 1] = { label = "RECORDS", screen = "SilphNetLeagueSign" }
           list[#list + 1] = { label = "MILESTONES", screen = "SilphNetMilestones" }
-          list[#list + 1] = { label = "REPORT BUG", screen = "SilphNetReportBug" }
           list[#list + 1] = { label = "ABOUT", screen = "SilphNetAbout" }
+          list[#list + 1] = { label = "REPORT BUG", screen = "SilphNetReportBug" }
+          if hasEmail == false then
+            list[#list + 1] = { label = "RECOVER ACCT", screen = "SilphNetRecoverAcct" }
+          end
           return list
         end
         function self:update(dt)
+          -- Same reasoning as the old top-level Start Menu hook's own
+          -- drain call: this screen can now be the first thing a fresh
+          -- login's label-dependent state (RECOVER ACCT's visibility)
+          -- lands on, so it drains here too rather than assuming some
+          -- other screen already did.
+          pcall(drainHttpResults)
           local list = items()
           local n = #list
           if self.index > n then self.index = 1 end
@@ -4012,21 +3977,17 @@ return function(mod)
         end
         function self:draw()
           Font.drawBox(0, 0, 20, 18)
-          Font.draw("SN MORE", 16, 8)
+          Font.draw("SILPHNET", 16, 8)
           local list = items()
           for i, it in ipairs(list) do
-            -- Wraps the selected row in "(" ")" rather than a leading
-            -- ">" - see this screen's own bugfix note in mod.card. ">"
-            -- turned out to not be in this font's glyph set at all, so
-            -- it silently drew as blank space. A leading "-" was tried
-            -- next, but "-" already means something specific elsewhere
-            -- in this same mod (SilphNetMilestones marks a LOCKED
-            -- milestone with "- ") - reusing it here as "selected"
-            -- risked a second, different confusion instead of fixing
-            -- the first one. Parentheses aren't used as a marker
-            -- anywhere else in this file, so there's no such collision,
-            -- and "(" "/" ")" are both already confirmed rendering
-            -- correctly elsewhere ("- NEARBY (n) -").
+            -- Same "(" ")" selection marker as this screen's predecessor
+            -- (SN MORE) used, kept deliberately rather than trying a
+            -- cursor glyph again - see that screen's own history: ">"
+            -- silently drew as blank space (not in this font's glyph set
+            -- at all), and "-" collides with SilphNetMilestones' existing
+            -- "- " LOCKED marker. Parentheses aren't used as a marker
+            -- anywhere else in this file and are already confirmed
+            -- rendering correctly ("- NEARBY (n) -").
             local label = it.label:sub(1, 14)
             local shown = (i == self.index) and ("(" .. label .. ")") or ("  " .. label)
             Font.draw(shown, 16, 16 + i * 8)
