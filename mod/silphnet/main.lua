@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.17.1)
+-- SilphNet - async presence + friends (v1.17.2)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -1190,6 +1190,31 @@ return function(mod)
   -- name (all-caps, spaces and hyphens only, e.g. "DOUBLE-EDGE",
   -- "HYPER BEAM"), so none of these delimiters risk colliding with real
   -- field content - no escaping needed.
+  -- src.pokemon.Stats is one of only three engine modules a mod may
+  -- require without the engine_internals permission (confirmed against
+  -- the Reference: Mod Object wiki page - the other two are
+  -- src.mods.Semver and src.audio.ChipAsm), specifically documented as
+  -- existing for "indicator mods" to use Stats.isShiny/Stats.calc. Wrapped
+  -- in pcall at the require site anyway (same defensive posture as
+  -- everything else in this file) rather than trusted to always succeed.
+  local StatsOk, Stats = pcall(require, "src.pokemon.Stats")
+  if not StatsOk then Stats = nil end
+
+  -- Shininess is a fixed property of a mon's DVs (individual values),
+  -- confirmed against the engine's own real Gen 2 formula (Speed/Defense/
+  -- Special DVs all 10, Attack DV one of 2/3/6/7/10/11/14/15) - the same
+  -- DVs Gen 1 has always stored and used for stat calculation, just never
+  -- checked for colour. Set once when a mon is generated (caught, bred,
+  -- given) and never changes afterward, so this reads exactly the same
+  -- whether the mon was caught five minutes or five months ago - nothing
+  -- retroactive needed. Returns false (never errors) if Stats didn't load
+  -- or a mon has no dvs table, rather than assuming shape.
+  local function isMonShiny(mon)
+    if not Stats or type(mon) ~= "table" or type(mon.dvs) ~= "table" then return false end
+    local ok, shiny = pcall(Stats.isShiny, mon.dvs)
+    return ok and shiny == true
+  end
+
   local function encodePartySnapshot()
     local save = game and game.save
     if not save or type(save.party) ~= "table" then return "" end
@@ -1201,6 +1226,7 @@ return function(mod)
       local maxHp = (type(mon.stats) == "table" and tonumber(mon.stats.hp)) or 0
       local hp = tonumber(mon.hp)
       if not hp then hp = maxHp end   -- mirrors Stats.ensure's own clamp-to-max fallback for a missing/stale value
+      local shiny = isMonShiny(mon) and "1" or "0"
       local moveNames = {}
       if type(mon.moves) == "table" then
         for _, mv in ipairs(mon.moves) do
@@ -1208,8 +1234,16 @@ return function(mod)
           if id then moveNames[#moveNames + 1] = tostring(id):upper() end
         end
       end
+      -- New "shiny" field inserted before the moves list (not appended at
+      -- the end) so decodePartySnapshot's existing "everything after the
+      -- 4th comma is the moves string" assumption doesn't silently start
+      -- swallowing part of a real move list - see that function's own
+      -- updated pattern below. Two extra chars per mon ("," + "0"/"1"),
+      -- 12 chars max across a full party of 6 - well inside the real
+      -- measured headroom schema.sql's party column comment already
+      -- documents (425 chars worst case against a 512 column).
       out[#out + 1] = table.concat({
-        species, tostring(level), tostring(hp), tostring(maxHp), table.concat(moveNames, "|"),
+        species, tostring(level), tostring(hp), tostring(maxHp), shiny, table.concat(moveNames, "|"),
       }, ",")
     end
     return table.concat(out, ";")
@@ -1220,17 +1254,31 @@ return function(mod)
   -- drawing a FRIEND's party (the string this function receives comes
   -- back from friend_detail.php exactly as encodePartySnapshot produced
   -- it, unmodified server-side - see stats.php/friend_detail.php).
+  -- Pattern gained a 5th capture (shiny) ahead of the trailing moves
+  -- string - a party snapshot from a friend still running a pre-shiny
+  -- build (before this field existed) would have no 5th comma at all, so
+  -- this falls back to the OLD 4-comma shape first and only tries the new
+  -- 5-comma one if that fails, rather than assuming every friend has
+  -- already updated. Old-format rows just read shiny = false, same as
+  -- they'd always have shown before this existed.
   local function decodePartySnapshot(str)
     local out = {}
     if type(str) ~= "string" or str == "" then return out end
     for monStr in string.gmatch(str, "([^;]+)") do
-      local species, level, hp, maxHp, movesStr = string.match(monStr, "^([^,]*),([^,]*),([^,]*),([^,]*),(.*)$")
+      local species, level, hp, maxHp, shinyFlag, movesStr =
+        string.match(monStr, "^([^,]*),([^,]*),([^,]*),([^,]*),([01]),(.*)$")
+      if not species then
+        -- Old (pre-shiny-field) format: 4 fields then the raw moves string.
+        species, level, hp, maxHp, movesStr = string.match(monStr, "^([^,]*),([^,]*),([^,]*),([^,]*),(.*)$")
+        shinyFlag = "0"
+      end
       if species then
         local moves = {}
         for mv in string.gmatch(movesStr or "", "([^|]+)") do moves[#moves + 1] = mv end
         out[#out + 1] = {
           species = species, level = tonumber(level) or 0,
-          hp = tonumber(hp) or 0, maxHp = tonumber(maxHp) or 0, moves = moves,
+          hp = tonumber(hp) or 0, maxHp = tonumber(maxHp) or 0,
+          shiny = (shinyFlag == "1"), moves = moves,
         }
       end
     end
@@ -2933,6 +2981,18 @@ return function(mod)
                       Font.draw(mon.moves[i]:sub(1, 16), 16, 64 + (i - 1) * 8)
                     end
                   end
+                  -- Shiny marker on its own row (y=96, one of the three
+                  -- rows this page's own comment above already documents
+                  -- as free) rather than appended onto the species/level
+                  -- line at y=32 - that line is already at its measured
+                  -- worst-case 16-char budget with nothing spare
+                  -- ("TENTACRUEL" + " LV" + 3 digits = 16 exactly), so
+                  -- adding anything there risked exactly the kind of
+                  -- silent truncation this file has hit before. Blank
+                  -- (nothing drawn) for a non-shiny mon, same "only show
+                  -- the row when there's something to say" approach the
+                  -- friends list/nearby screens already use elsewhere.
+                  if mon.shiny then Font.draw("SHINY!", 16, 96) end
                 end
               else
                 local act = cur.activity
