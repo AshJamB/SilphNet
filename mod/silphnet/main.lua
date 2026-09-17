@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.17.0)
+-- SilphNet - async presence + friends (v1.16.4)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -2263,47 +2263,6 @@ return function(mod)
     despawnAllMarkers()
   end
 
-  -- ---- modern presentation-layer helpers (v1.17.0 restyle) -----------------
-  -- Every screen below still draws its actual glyphs with mod.ui.Font (the
-  -- real pixel font, same as before - never love.graphics.print), but no
-  -- longer wraps them in Font.drawBox's single continuous GB-frame border.
-  -- Instead: a plain love.graphics background fill, a header band for the
-  -- title, and a footer band (separated by a hairline divider) for the
-  -- button hints - a header/content/footer split with real breathing room
-  -- between rows, the "modern UI suite"-style layout real community mods
-  -- for this exact engine already use, while keeping the authentic pixel
-  -- font/content untouched. Canvas is still the same native 160x144 (20x18
-  -- tiles) every screen already assumed via the old Font.drawBox(0,0,20,18)
-  -- call - see the many "144px budget" comments throughout this file - so
-  -- every reflowed y-coordinate below stays inside that same box, just
-  -- redistributed with more space between rows instead of packed at a flat
-  -- 8px/16px grid. This is purely presentational: no screen's update(),
-  -- data reads, or navigation changed as part of this pass, only where and
-  -- how each already-existing line of text gets drawn.
-  local SN_W, SN_H = 160, 144
-  local SN_HEADER_H = 16
-  local SN_DIVIDER_Y = 116
-  local SN_FOOTER_Y1 = 120
-  local SN_FOOTER_Y2 = 132
-
-  -- Draws the shared background + header band + footer divider for one
-  -- screen and, if given, the title text in the header. Screens still call
-  -- mod.ui.Font.draw themselves for every other line - this only ever
-  -- touches love.graphics state (background/panel colors), always reset to
-  -- opaque white before returning so a screen's own Font.draw calls right
-  -- after this are never accidentally tinted by it.
-  local function snBegin(title)
-    love.graphics.setColor(0.09, 0.10, 0.15, 1)
-    love.graphics.rectangle("fill", 0, 0, SN_W, SN_H)
-    love.graphics.setColor(0.16, 0.20, 0.30, 1)
-    love.graphics.rectangle("fill", 0, 0, SN_W, SN_HEADER_H)
-    love.graphics.setColor(0.42, 0.64, 0.92, 1)
-    love.graphics.rectangle("fill", 0, SN_HEADER_H, SN_W, 1)
-    love.graphics.rectangle("fill", 0, SN_DIVIDER_Y, SN_W, 1)
-    love.graphics.setColor(1, 1, 1, 1)
-    if title then mod.ui.Font.draw(title, 8, 4) end
-  end
-
   -- ---- status + reset-confirm + friends-list screens -----------------------
   -- Registered here (not at the top of the file) so these closures capture
   -- the *local* state variables declared above as upvalues - Lua binds a
@@ -2376,22 +2335,42 @@ return function(mod)
           if input:wasPressed("select") then mod.ui.push(g, "SilphNetResetConfirm") end
         end
         function self:draw()
-          snBegin("SILPHNET")
-          -- Reflowed for the v1.17.0 modern layout: header/content/footer
-          -- bands (see snBegin/SN_DIVIDER_Y/SN_FOOTER_Y1/SN_FOOTER_Y2)
-          -- replace the old single continuous GB box border, with content
-          -- rows now on a 10px grid (22/32/42/52/62/72/82/92/102) instead
-          -- of packed at the old 8px-exact positions - real spacing between
-          -- every row now, not just where a previous pass could free one up.
-          -- Text/logic below is unchanged from before this pass - only the
-          -- x/y each line draws at moved.
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("- SILPHNET -", 16, 8)
+          -- The box is drawn at 20x18 TILES (8px each) starting at pixel 0,
+          -- but every line of text here starts at x=16 (2 tiles in), not
+          -- x=0 - so the true remaining width is AT MOST 160-16=144px
+          -- (18 8px characters), not the full 20 the box itself spans. An
+          -- earlier pass budgeted lines at 20 chars and missed this inset
+          -- entirely, which is why "A:LOGIN ST:FRIENDS" (19 chars) still
+          -- got clipped on real hardware even after being "shortened."
           --
-          -- The name sits directly under the header with no "NAME" label -
-          -- saves a full row versus a separate labelled line.
-          Font.draw((myName or "----"):sub(1, 16), 16, 22)
+          -- That 18-char figure ALSO assumes each glyph is exactly 8px,
+          -- which isn't confirmed anywhere in the engine docs - so rather
+          -- than cut it exactly to the calculated limit a second time,
+          -- every line here is deliberately kept to <= 16 characters, two
+          -- shorter than the calculated boundary, as a real safety margin
+          -- against being wrong about glyph width again. << VERIFY >> on a
+          -- real device - if this still clips, the true per-character
+          -- width is bigger than 8px and this margin needs to grow further.
+          -- Vertical layout hit the same margin problem as the horizontal
+          -- one: the box is 18 tiles / 144px tall, and the last line was
+          -- drawn at y=136 - its own 8px glyph height lands its bottom
+          -- edge EXACTLY on the box's bottom border with zero margin,
+          -- which is what clipped "B:BACK SL:RESET" on real hardware.
+          -- Every row below is shifted up by 8px (one line) to leave a
+          -- real gap above the border, same conservative-margin approach
+          -- as the horizontal character budget. << VERIFY >> on-device.
+          --
+          -- The name sits directly under the SILPHNET title with no "NAME"
+          -- label - saves a full row versus a separate labelled line. It
+          -- doesn't fit on the SAME line as the title ("SILPHNET - " is 11
+          -- chars, leaving only 5 for a name that can be up to 10), so
+          -- this is the two-line version of that idea instead.
+          Font.draw((myName or "----"):sub(1, 16), 16, 16)
           Font.draw("ID   " .. (myTrainerId or "-----"), 16, 32)
-          Font.draw("STATUS", 16, 42)
-          Font.draw(statusText():sub(1, 16), 16, 52)
+          Font.draw("STATUS", 16, 48)
+          Font.draw(statusText():sub(1, 16), 16, 56)
           -- Counts distinct PEOPLE, not distinct friends[] entries - an
           -- entry exists per (friend, game_version), so a friend with two
           -- active saves would otherwise be double-counted here.
@@ -2401,21 +2380,29 @@ return function(mod)
               seenPeople[f.account_id] = true; n = n + 1
             end
           end
-          Font.draw("FRIENDS " .. n, 16, 62)
-          Font.draw("REQUESTS " .. #pendingRequests, 16, 72)
+          -- Reverted to the original "FRIENDS n" spacing (readable, not
+          -- squashed) - the online count moved down onto the A:FRIENDS
+          -- hint line instead of squeezing onto this one, per direct
+          -- feedback that "FRIENDS3" (glued together) looked worse than
+          -- either line looked before this feature existed.
+          Font.draw("FRIENDS " .. n, 16, 72)
+          Font.draw("REQUESTS " .. #pendingRequests, 16, 80)
           -- "RT"/"LT" here mean the D-PAD's right/left, NOT shoulder
           -- buttons - this device has no L/R at all (D-pad, A, B, SELECT,
           -- START only), and the actual input:wasPressed() calls above are
           -- already bound to "right"/"left" on the D-pad, never a shoulder
-          -- button.
+          -- button. The old labels ("RT:ADD", "LT:REQUEST") were just a
+          -- confusing abbreviation left over from shortening this line to
+          -- fix the overflow - relabeled below to say D-PAD explicitly so
+          -- this doesn't read as a control that doesn't exist.
           if authState == "confirm_register" then
-            Font.draw("NO ACCOUNT FOUND", 16, 82)
-            Font.draw("FOR THIS NAME", 16, 92)
-            Font.draw("A:CREATE ACCOUNT", 16, 102)
+            Font.draw("NO ACCOUNT FOUND", 16, 96)
+            Font.draw("FOR THIS NAME", 16, 104)
+            Font.draw("A:CREATE ACCOUNT", 16, 112)
           elseif authState ~= "authed" then
-            Font.draw("A:RETRY LOGIN", 16, 82)
-            Font.draw("SET NAME+PASS IN", 16, 92)
-            Font.draw("MOD OPTIONS MENU", 16, 102)
+            Font.draw("A:RETRY LOGIN", 16, 96)
+            Font.draw("SET NAME+PASS IN", 16, 104)
+            Font.draw("MOD OPTIONS MENU", 16, 112)
           else
             -- Online count moved here, onto the A:FRIENDS hint line
             -- itself, rather than squeezed onto the FRIENDS/REQUESTS
@@ -2453,14 +2440,17 @@ return function(mod)
             -- this at 16 chars even at a double-digit count.
             local friendsOnlineCount = countFriendsOnline()
             local suffix = (friendsOnlineCount > 0) and ("(" .. tostring(friendsOnlineCount) .. " ON)") or ""
-            Font.draw(("A:FRIENDS" .. suffix):sub(1, 16), 16, 82)
-            Font.draw("DPAD R:ADD L:REQ", 16, 92)
+            Font.draw(("A:FRIENDS" .. suffix):sub(1, 16), 16, 96)
+            Font.draw("DPAD R:ADD L:REQ", 16, 104)
           end
-          Font.draw("B:BACK SL:RESET", 16, SN_FOOTER_Y1)
+          Font.draw("B:BACK SL:RESET", 16, 120)
           -- mod.version is read straight from manifest.json, so this can
           -- never drift out of sync with a real release the way a
-          -- hand-typed string would.
-          Font.draw("V" .. tostring(mod.version or "?"), 16, SN_FOOTER_Y2)
+          -- hand-typed string would. y=128 (not 136) leaves one clear
+          -- line of margin above the box's 144px bottom edge - the exact
+          -- same zero-margin mistake that clipped B:BACK/SL:RESET before
+          -- would repeat at y=136 (136+8=144, flush with the border).
+          Font.draw("V" .. tostring(mod.version or "?"), 16, 128)
         end
         return self
       end,
@@ -2598,51 +2588,84 @@ return function(mod)
           if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
+          Font.drawBox(0, 0, 20, 18)
           local ids = sortedIds()
           if #ids == 0 then
-            snBegin("FRIENDS")
-            Font.draw("NO FRIENDS YET", 16, 22)
+            Font.draw("FRIENDS", 16, 8)
+            Font.draw("NO FRIENDS YET", 16, 40)
           else
             local id = ids[self.page]
             local f = friends[id]
             local lastSeenUnix = parseMysqlDatetimeUtc(f.last_seen)
             local ago = timeAgoText(lastSeenUnix)
             local isOnline = lastSeenUnix and (os.time() - lastSeenUnix) <= OFFLINE_AFTER
-            -- Reflowed for the v1.17.0 modern layout - the page counter
-            -- now lives in the header title itself ("FRIENDS 1/3"), and
-            -- content rows sit on a 10px grid (22/32/42/.../82) with real
-            -- clearance above the footer divider, instead of the old
-            -- 144px-exact packed layout. Text/logic unchanged.
-            snBegin(("FRIENDS " .. (self.page) .. "/" .. #ids):sub(1, 16))
-            Font.draw((f.name or "?"):sub(1, 16), 16, 22)
+            -- "FRIENDS" is back on this line alongside the counter now
+            -- that the version tag moved down onto the ONLINE/OFFLINE
+            -- line instead (see below) - "FRIENDS 1/3" is only 11 chars
+            -- (worst realistic case "FRIENDS 99/99" is 13), comfortably
+            -- under the 16-char budget now that this line isn't also
+            -- carrying a version tag. Dropped briefly in an earlier
+            -- round specifically because "FRIENDS 1/3 (YELLOW)" would
+            -- have overflowed - that reason no longer applies once the
+            -- version moved elsewhere, so the title text is restored.
+            Font.draw("FRIENDS " .. (self.page) .. "/" .. #ids, 16, 8)
+            -- This screen is genuinely at its 144px limit (18 rows,
+            -- same real box every screen in this file uses) - moving the
+            -- counter up here only frees ONE row (8px), not room for a
+            -- generically taller layout. name/id keep their original
+            -- spacing below (40/48) since that was never what was
+            -- reported as squashed - the actual complaint was
+            -- specifically the GAP between the last data row ("N HR
+            -- AGO") and the first hint row, which used to be only 8px
+            -- (104 -> 112). The one reclaimed row goes exactly there
+            -- instead: ago stays at 104, but the hint block now starts
+            -- at 120 instead of 112, giving that specific gap real
+            -- clearance. This is why A:DETAIL and LEFT/RIGHT:PAGE are
+            -- now combined onto one line below - keeping all 3 hint
+            -- lines separate AND adding this clearance would have
+            -- overflowed the box; combining two of them was the only way
+            -- to free a full row for where the complaint actually was.
+            Font.draw((f.name or "?"):sub(1, 16), 16, 40)
             -- friends.php already returns trainer_id (zero-padded, same as
             -- everywhere else it's shown).
-            Font.draw("ID   " .. (f.trainer_id or "-----"), 16, 32)
+            Font.draw("ID   " .. (f.trainer_id or "-----"), 16, 48)
+            -- Version tag now lives HERE, next to ONLINE, not on the page
+            -- counter line - checked by hand against every real version
+            -- name: RED=12, BLUE=13, YELLOW=15, GOLD=13, SILVER=15,
+            -- CRYSTAL=16 (the longest - "ONLINE (CRYSTAL)" lands exactly
+            -- on the 16-char/line budget, not past it, the same way other
+            -- exactly-16-char lines elsewhere in this file already do).
             -- Still only shown while this specific entry is ONLINE -
             -- offline, no version at all, regardless of how many
             -- versions this friend has (per earlier direct feedback:
             -- "when they are online, it should show the version they are
             -- playing, simple, offline, no version at all").
             if isOnline then
-              Font.draw(("ONLINE (" .. (f.game_version or "UNKNOWN") .. ")"):sub(1, 16), 16, 42)
+              Font.draw(("ONLINE (" .. (f.game_version or "UNKNOWN") .. ")"):sub(1, 16), 16, 56)
             else
-              Font.draw("OFFLINE", 16, 42)
+              Font.draw("OFFLINE", 16, 56)
             end
             if f.map_id then
-              Font.draw(friendlyMapName(f.map_id):sub(1, 16), 16, 52)
-              Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 62)
-              Font.draw(ago, 16, 72)
+              Font.draw(friendlyMapName(f.map_id):sub(1, 16), 16, 72)
+              Font.draw("(" .. tostring(f.x) .. "," .. tostring(f.y) .. ")", 16, 88)
+              Font.draw(ago, 16, 104)
             else
-              Font.draw("NEVER SEEN YET", 16, 52)
+              Font.draw("NEVER SEEN YET", 16, 72)
             end
           end
-          -- A:DETAIL and LEFT/RIGHT:PAGE combined onto ONE hint line, same
-          -- as before - shown only with >=1 friend (nothing to open/page
-          -- with none). LEFT/RIGHT:PAGE part only actually applies with
-          -- >1 friend, but it's cheap/harmless to show "LR:PAGE" even with
-          -- exactly 1 friend (pressing it just does nothing).
-          if #ids > 0 then Font.draw("A:DETAIL LR:PAGE", 16, SN_FOOTER_Y1) end
-          Font.draw("B:BACK SL:REMOVE", 16, SN_FOOTER_Y2)
+          -- A:DETAIL and LEFT/RIGHT:PAGE combined onto ONE hint line
+          -- ("A:DETAIL LR:PAGE", exactly 16 chars) instead of two
+          -- separate lines - see the long comment above for why: this
+          -- screen has no spare row left to add real clearance above the
+          -- hint block AND keep 3 separate hint lines, so two were
+          -- merged to free the row that clearance needed. Shown only
+          -- with >=1 friend (nothing to open/page with none).
+          -- LEFT/RIGHT:PAGE part only actually applies with >1 friend,
+          -- but it's cheap/harmless to show "LR:PAGE" even with exactly
+          -- 1 friend (pressing it just does nothing) - simpler than
+          -- drawing two different variants of this merged line.
+          if #ids > 0 then Font.draw("A:DETAIL LR:PAGE", 16, 120) end
+          Font.draw("B:BACK SL:REMOVE", 16, 128)
         end
         return self
       end,
@@ -2755,6 +2778,7 @@ return function(mod)
           end
         end
         function self:draw()
+          Font.drawBox(0, 0, 20, 18)
           local name = (pendingFriendDetail and pendingFriendDetail.name or "?"):sub(1, 16)
           -- Set below, only when currently sitting on a PARTY slot with
           -- more than one real mon to page through - read by the hint
@@ -2763,17 +2787,13 @@ return function(mod)
           -- time down there) so the hint line doesn't need its own
           -- redundant slots() call and version of this same check.
           local showsPartyPaging = false
-          -- Reflowed for the v1.17.0 modern layout - the header band now
-          -- carries the title (name, or "<name> <KIND>" once slots exist),
-          -- and every content row moved onto a 12px grid starting at y=22
-          -- instead of the old 8px-exact packed rows. Text/logic unchanged.
           if friendDetailState == "loading" then
-            snBegin(name)
-            Font.draw("LOADING...", 16, 22)
+            Font.draw(name, 16, 8)
+            Font.draw("LOADING...", 16, 40)
           elseif friendDetailState == "failed" then
-            snBegin(name)
-            Font.draw("COULDN'T LOAD", 16, 22)
-            Font.draw("TRY AGAIN LATER", 16, 34)
+            Font.draw(name, 16, 8)
+            Font.draw("COULDN'T LOAD", 16, 40)
+            Font.draw("TRY AGAIN LATER", 16, 48)
           else
             local s = slots()
             if #s == 0 then
@@ -2781,30 +2801,37 @@ return function(mod)
               -- ANY version (never uploaded stats or activity at all) -
               -- distinct from "NO STATS YET" on a specific version's
               -- page, since there isn't even a page to land on here.
-              snBegin(name)
-              Font.draw("NO DATA YET", 16, 22)
-              Font.draw("(NOT UPLOADED", 16, 34)
-              Font.draw("BY THEM YET)", 16, 46)
+              Font.draw(name, 16, 8)
+              Font.draw("NO DATA YET", 16, 32)
+              Font.draw("(NOT UPLOADED", 16, 40)
+              Font.draw("BY THEM YET)", 16, 48)
             else
               if self.slot > #s then self.slot = 1 end
               local cur = s[self.slot]
-              -- Title is "<name> STATS"/"<name> ACTIVITY", now in the
-              -- header band, with the game version as the first content
-              -- row right underneath - e.g. "ARCHADA STATS" / "BLUE" -
-              -- rather than folded onto the same line or onto a hint line
-              -- further down, per direct feedback ("wouldn't it just be
-              -- better if it said... ARCHADA STATS / BLUE"). Shown for
-              -- every friend, even ones with only one version - it's now
-              -- just part of reading the page, not a conditional
-              -- disambiguation hint.
-              snBegin((name .. " " .. cur.kind):sub(1, 16))
-              Font.draw(cur.version:sub(1, 16), 16, 22)
+              -- Title is "<name> STATS"/"<name> ACTIVITY" (y=8), with the
+              -- game version on its OWN line right underneath (y=16) -
+              -- e.g. "ARCHADA STATS" / "BLUE" - rather than folded onto
+              -- the same line or onto a hint line further down, per
+              -- direct feedback ("wouldn't it just be better if it
+              -- said... ARCHADA STATS / BLUE"). Shown for every friend,
+              -- even ones with only one version - it's now just part of
+              -- reading the page, not a conditional disambiguation hint.
+              Font.draw((name .. " " .. cur.kind):sub(1, 16), 16, 8)
+              Font.draw(cur.version:sub(1, 16), 16, 16)
               if cur.kind == "STATS" then
+                -- 5 data rows, y=32 to y=96 (16px apart) - checked
+                -- against a real pixel mockup after an earlier draft
+                -- collided its own LEAGUE WINS/MONEY lines with the
+                -- hint row below. Shifted down from where they sat
+                -- before the version got its own title line (was y=8
+                -- start with data from y=32; version's extra line
+                -- didn't need to push these down further since y=16 was
+                -- already spare room above y=32).
                 local st = cur.stats
                 if not st then
-                  Font.draw("NO STATS YET", 16, 34)
-                  Font.draw("(NOT UPLOADED", 16, 46)
-                  Font.draw("BY THEM YET)", 16, 58)
+                  Font.draw("NO STATS YET", 16, 32)
+                  Font.draw("(NOT UPLOADED", 16, 40)
+                  Font.draw("BY THEM YET)", 16, 48)
                 else
                   -- "BADGES" + right-padded count, same left-label/
                   -- right-value layout as every stats-style line
@@ -2816,22 +2843,27 @@ return function(mod)
                   -- unconditionally, which would have shown something
                   -- like "BADGES     12/8" for a Gold/Silver friend.
                   -- cur.version is this specific page's own game_version
-                  -- (e.g. "BLUE" or "GOLD"), already in scope.
+                  -- (e.g. "BLUE" or "GOLD"), already in scope - "BADGES
+                  -- 16/16" is 16 chars exactly, still comfortably within
+                  -- budget at the maximum either way.
                   local badgeMax = isGen2(cur.version) and 16 or 8
-                  Font.draw("BADGES     " .. tostring(tonumber(st.badges) or 0) .. "/" .. badgeMax, 16, 34)
-                  Font.draw("SEEN     " .. tostring(tonumber(st.pokedex_seen) or 0), 16, 46)
-                  Font.draw("CAUGHT   " .. tostring(tonumber(st.pokedex_caught) or 0), 16, 58)
-                  Font.draw("LEAGUE WINS " .. tostring(tonumber(st.league_wins) or 0), 16, 70)
+                  Font.draw("BADGES     " .. tostring(tonumber(st.badges) or 0) .. "/" .. badgeMax, 16, 32)
+                  Font.draw("SEEN     " .. tostring(tonumber(st.pokedex_seen) or 0), 16, 48)
+                  Font.draw("CAUGHT   " .. tostring(tonumber(st.pokedex_caught) or 0), 16, 64)
+                  Font.draw("LEAGUE WINS " .. tostring(tonumber(st.league_wins) or 0), 16, 80)
                   -- Money can be up to 6 digits (real games cap at
                   -- 999999) - "MONEY  " (7 chars) + 6 digits = 13,
                   -- comfortably under 16 even at the maximum.
-                  Font.draw("MONEY  " .. tostring(tonumber(st.money) or 0), 16, 82)
-                  -- Time played - requested directly ("I wanted to add
-                  -- TIME PLAYED, but I think we missed it" - save.playTime
-                  -- was confirmed readable in the original save-format
+                  Font.draw("MONEY  " .. tostring(tonumber(st.money) or 0), 16, 96)
+                  -- Time played - the one spare row this page had left
+                  -- (y=112, between MONEY and the old hint line) before
+                  -- the hint line moved down to y=120 to make room (see
+                  -- below). Requested directly ("I wanted to add TIME
+                  -- PLAYED, but I think we missed it" - save.playTime was
+                  -- confirmed readable in the original save-format
                   -- research but never actually wired into the stats
                   -- upload/schema/screen until now).
-                  Font.draw(playTimeText(st.play_seconds), 16, 94)
+                  Font.draw(playTimeText(st.play_seconds), 16, 112)
                 end
               elseif cur.kind == "PARTY" then
                 -- One mon per screen, paged with LEFT/RIGHT (see
@@ -2847,18 +2879,24 @@ return function(mod)
                 local mons = decodePartySnapshot(cur.stats and cur.stats.party)
                 showsPartyPaging = #mons > 1
                 if #mons == 0 then
-                  Font.draw("NO PARTY DATA", 16, 34)
-                  Font.draw("(NOT UPLOADED", 16, 46)
-                  Font.draw("BY THEM YET)", 16, 58)
+                  Font.draw("NO PARTY DATA", 16, 32)
+                  Font.draw("(NOT UPLOADED", 16, 40)
+                  Font.draw("BY THEM YET)", 16, 48)
                 else
                   if self.partyIndex > #mons then self.partyIndex = 1 end
                   local mon = mons[self.partyIndex]
-                  -- Version row (drawn above, shared with STATS/ACTIVITY)
-                  -- gets "n/total" appended rather than its own extra row
-                  -- - "BLUE 1/6" style, comfortably under 16 chars even at
-                  -- the max (a 2-char version name would be unusual, but
-                  -- even "YELLOW 6/6" is only 10 chars).
-                  Font.draw((cur.version .. " " .. self.partyIndex .. "/" .. #mons):sub(1, 16), 16, 22)
+                  -- Version line (already drawn above, shared with
+                  -- STATS/ACTIVITY) gets "n/total" appended rather than
+                  -- its own extra row - this screen has one row less of
+                  -- headroom than STATS/ACTIVITY once 4 move lines are
+                  -- accounted for (32 through 112 = 6 rows exactly:
+                  -- species+level, HP, then 4 moves), so the version
+                  -- line is overwritten here with the combined form
+                  -- instead of adding a 7th row. "BLUE 1/6" style,
+                  -- comfortably under 16 chars even at the max (a 2-char
+                  -- version name would be unusual, but even "YELLOW 6/6"
+                  -- is only 10 chars).
+                  Font.draw((cur.version .. " " .. self.partyIndex .. "/" .. #mons):sub(1, 16), 16, 16)
                   -- Species + level, one line - longest real Gen 1
                   -- species name (TENTACRUEL, 10 chars) + " LV" + up to
                   -- 3 digits comfortably fits 16 chars (10+3+3=16 at the
@@ -2872,18 +2910,27 @@ return function(mod)
                   -- afterward purely as the same defensive cap every
                   -- other line here already has, not expected to
                   -- routinely cut anything short now.
-                  Font.draw((formatSpeciesName(mon.species) .. " LV" .. mon.level):sub(1, 16), 16, 34)
-                  Font.draw("HP " .. mon.hp .. "/" .. mon.maxHp, 16, 46)
-                  -- Up to 4 moves, one per line, on the same 12px grid as
-                  -- everything else on this screen (y=58/70/82/94). The
-                  -- longest real Gen 1 move names (e.g. "DOUBLE-EDGE",
+                  Font.draw((formatSpeciesName(mon.species) .. " LV" .. mon.level):sub(1, 16), 16, 32)
+                  Font.draw("HP " .. mon.hp .. "/" .. mon.maxHp, 16, 48)
+                  -- Up to 4 moves, one per line, packed at consecutive
+                  -- 8px rows (y=64,72,80,88) instead of the previous
+                  -- double-height 16px spacing (y=64,80,96,112) - caught
+                  -- directly via a real report that the 4th move (at the
+                  -- old y=112) sat right on top of the hint line at
+                  -- y=120, with no visible gap between them. Each move is
+                  -- one short line with nothing else on its row, so a
+                  -- full 16px (two GB text rows) per move was never
+                  -- actually needed - packing them tight frees three
+                  -- clear rows (y=96/104/112) versus the old layout, all
+                  -- unused now rather than crowding the hint. The longest
+                  -- real Gen 1 move names (e.g. "DOUBLE-EDGE",
                   -- "SOLARBEAM") are comfortably under 16 chars on their
                   -- own line without truncation; :sub(1,16) here is
                   -- purely defensive, not expected to ever actually cut a
                   -- real move name short.
                   for i = 1, 4 do
                     if mon.moves[i] then
-                      Font.draw(mon.moves[i]:sub(1, 16), 16, 58 + (i - 1) * 12)
+                      Font.draw(mon.moves[i]:sub(1, 16), 16, 64 + (i - 1) * 8)
                     end
                   end
                 end
@@ -2900,11 +2947,11 @@ return function(mod)
                   -- single-line activity message (no newline in it)
                   -- still draws fine - line2 is just "" in that case.
                   local line1, line2 = act.message:match("^([^\n]*)\n?(.*)$")
-                  Font.draw((line1 or ""):sub(1, 16), 16, 34)
-                  Font.draw((line2 or ""):sub(1, 16), 16, 46)
-                  Font.draw(timeAgoText(parseMysqlDatetimeUtc(act.created_at)), 16, 58)
+                  Font.draw((line1 or ""):sub(1, 16), 16, 32)
+                  Font.draw((line2 or ""):sub(1, 16), 16, 40)
+                  Font.draw(timeAgoText(parseMysqlDatetimeUtc(act.created_at)), 16, 48)
                 else
-                  Font.draw("NO ACTIVITY YET", 16, 34)
+                  Font.draw("NO ACTIVITY YET", 16, 32)
                 end
                 -- Last-seen repeated here from the main friends screen -
                 -- NOT moved, that screen still shows it exactly as
@@ -2919,15 +2966,20 @@ return function(mod)
                 -- something and going offline are different moments).
                 local pr = friendDetail and friendDetail.presence
                 if pr and pr.map_id then
-                  Font.draw("LAST SEEN", 16, 70)
-                  Font.draw(friendlyMapName(pr.map_id):sub(1, 16), 16, 82)
-                  Font.draw(timeAgoText(parseMysqlDatetimeUtc(pr.last_seen)), 16, 94)
+                  Font.draw("LAST SEEN", 16, 72)
+                  Font.draw(friendlyMapName(pr.map_id):sub(1, 16), 16, 80)
+                  Font.draw(timeAgoText(parseMysqlDatetimeUtc(pr.last_seen)), 16, 88)
                 else
-                  Font.draw("NEVER SEEN YET", 16, 70)
+                  Font.draw("NEVER SEEN YET", 16, 72)
                 end
               end
             end
           end
+          -- Hint line moved down from y=112 to y=120 - that row is now
+          -- TIME PLAYED's spot on the STATS page (see above). Still one
+          -- clear line of margin above the box's 144px bottom edge, same
+          -- rule every screen in this file follows.
+          --
           -- Only the PARTY page (with more than one real mon to page
           -- through) adds "LR:MON" to the hint and a second hint row -
           -- STATS/ACTIVITY/NO-DATA cases (and a single-mon PARTY page,
@@ -2935,11 +2987,11 @@ return function(mod)
           -- behavior to advertise, so their hint stays exactly as it
           -- was before this page existed.
           if friendDetailState == "idle" then
-            Font.draw(showsPartyPaging and "LR:MON A:NEXT" or "A:NEXT B:BACK", 16, SN_FOOTER_Y1)
+            Font.draw(showsPartyPaging and "LR:MON A:NEXT" or "A:NEXT B:BACK", 16, 120)
           else
-            Font.draw("B:BACK", 16, SN_FOOTER_Y1)
+            Font.draw("B:BACK", 16, 120)
           end
-          if showsPartyPaging then Font.draw("B:BACK", 16, SN_FOOTER_Y2) end
+          if showsPartyPaging then Font.draw("B:BACK", 16, 128) end
         end
         return self
       end,
@@ -3006,30 +3058,51 @@ return function(mod)
           if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
-          -- Reflowed for the v1.17.0 modern layout - title moves into the
-          -- header band, current map becomes the first content row, and
-          -- the rest sit on a 12px grid (22/34/46/58/70) with real
-          -- clearance above the footer divider. Text/logic unchanged.
-          snBegin(("NEARBY (" .. #nearby .. ")"):sub(1, 16))
-          Font.draw(friendlyMapName(myMap):sub(1, 16), 16, 22)
+          Font.drawBox(0, 0, 20, 18)
+          -- Two-line title, matching the "- X -" framing used elsewhere in
+          -- this file (e.g. SilphNetAbout's "- SILPHNET -"): the count on
+          -- the first line answers "how many people" before you even page
+          -- through, the current map on the second says where they are -
+          -- both real, useful context that a bare "NEARBY" didn't give.
+          -- No "- X -" framing on the map name line - every real map name
+          -- in FRIENDLY_MAP_NAMES fits in 16 chars on its own (longest are
+          -- CINNABAR ISLAND / VIRIDIAN FOREST at 15), but the dash framing
+          -- ("- " + " -" = 4 chars) would have pushed those over. The
+          -- title line keeps its dashes since "NEARBY (n)" is always
+          -- short. sub(1, 16) stays as a backstop in case a map id ever
+          -- falls through to the unmapped fallback (mapId with
+          -- underscores swapped for spaces) and comes out longer than
+          -- every name in the real table.
+          Font.draw("- NEARBY (" .. #nearby .. ") -", 16, 8)
+          Font.draw(friendlyMapName(myMap):sub(1, 16), 16, 16)
           if #nearby == 0 then
-            Font.draw("NO ONE ELSE HERE", 16, 40)
+            Font.draw("NO ONE ELSE HERE", 16, 48)
           else
             local n = nearby[self.page]
-            Font.draw((self.page) .. "/" .. #nearby, 16, 34)
-            Font.draw((n.name or "?"):sub(1, 16), 16, 46)
-            Font.draw("ID   " .. (n.trainer_id or "-----"), 16, 58)
+            Font.draw((self.page) .. "/" .. #nearby, 16, 40)
+            Font.draw((n.name or "?"):sub(1, 16), 16, 48)
+            Font.draw("ID   " .. (n.trainer_id or "-----"), 16, 56)
             if isAlreadyFriend(n.account_id) then
-              Font.draw("ALREADY A FRIEND", 16, 70)
+              Font.draw("ALREADY A FRIEND", 16, 72)
             else
-              Font.draw("NOT YET A FRIEND", 16, 70)
-              -- START jumps straight to Add Friend with this entry's
-              -- Trainer ID already filled in (see self:update above).
-              Font.draw("START:ADD FRIEND", 16, 82)
+              Font.draw("NOT YET A FRIEND", 16, 72)
+              -- Was "RIGHT:ADD FRIEND" / "ON STATUS SCREEN" - genuinely
+              -- misleading, reported directly: RIGHT is ALREADY bound on
+              -- this very screen (paging to the next nearby entry), so
+              -- the hint read as "press RIGHT to add this friend" when
+              -- RIGHT does something else entirely here. Briefly
+              -- reworded to describe going to the Status screen instead,
+              -- then upgraded again to a REAL working shortcut once
+              -- START (genuinely unbound on this screen) turned out to
+              -- be free: it now pushes SilphNetAddFriend with this
+              -- entry's Trainer ID already filled in, so the hint can
+              -- finally name a button that actually does the thing it
+              -- says.
+              Font.draw("START:ADD FRIEND", 16, 80)
             end
           end
-          if #nearby > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, SN_FOOTER_Y1) end
-          Font.draw("B:BACK", 16, SN_FOOTER_Y2)
+          if #nearby > 1 then Font.draw("LEFT/RIGHT:PAGE", 16, 112) end
+          Font.draw("B:BACK", 16, 128)
         end
         return self
       end,
@@ -3764,26 +3837,78 @@ return function(mod)
       -- very first Start Menu open after a completed login already shows
       -- the correct name.
       pcall(drainHttpResults)
-      -- v1.17.0: consolidated back down to ONE Start Menu row. The
-      -- previous version's fix (splitting STATUS/NEARBY/ONLINE/RECOVER
-      -- ACCT/MORE into up to 5 separate top-level rows, see each row's
-      -- own removed comment in version control history) solved the
-      -- specific "MORE" submenu nesting complaint at the time, but kept
-      -- growing the Start Menu itself right back into "getting full of
-      -- SN stuff" territory - reported again once RECORDS/REPORT
-      -- BUG-style destinations were considered for their own rows too.
-      -- Rather than adding a 6th/7th top-level row, or another
-      -- SN-MORE-style nested submenu, every SilphNet destination now
-      -- lives one level down inside a single "SILPHNET" row/home screen
-      -- (SilphNetHome, registered below) - one predictable place to look,
-      -- regardless of how many features this mod grows to have. This is
-      -- purely a navigation change: every destination screen
-      -- (SilphNetStatus/Nearby/Online/Milestones/About/ReportBug/
-      -- RecoverAcct, plus the League sign's records board) still does
-      -- exactly what it always did once opened - only how you reach it
-      -- from the Start Menu changed.
-      mod.ui.insertBefore(items, "QUIT", { label = "SILPHNET",
-        onSelect = function() mod.ui.push(g, "SilphNetHome") end })
+      mod.ui.insertBefore(items, "QUIT", { label = statusLabel(),
+        onSelect = function() mod.ui.push(g, "SilphNetStatus") end })
+      -- A second, separate Start Menu row for Nearby - rather than
+      -- cramming every new feature into the one SILPHNET row (or bolting
+      -- a mode toggle onto the Friends screen, which is what an earlier
+      -- version of this did before it was simplified back out), each
+      -- major feature gets its own row as the mod grows. "SN" (not the
+      -- full "SILPHNET") keeps this within the same conservative label
+      -- length every other row here uses. Anchored on "QUIT" too, same
+      -- as the row above, so both SilphNet rows land together just above
+      -- it regardless of what other mods insert between them.
+      mod.ui.insertBefore(items, "QUIT", { label = "SN NEARBY",
+        onSelect = function() mod.ui.push(g, "SilphNetNearby") end })
+      -- Third Start Menu row for About - moved here from the mod
+      -- manager's OPTIONS screen (see removed ui.options.rows hook
+      -- below this comment used to sit above), which is where an
+      -- earlier version of this put it on the reasoning that the
+      -- in-game GB screen was already at its 16-char/144px budget.
+      -- Reported on-device as a real bug, not a design tradeoff:
+      -- selecting "ABOUT SILPHNET" from the options screen closed the
+      -- Start Menu/options UI entirely rather than opening the About
+      -- screen - mod.ui.push(g, "SilphNetAbout") pushing a genuine
+      -- gameplay-style screen onto a stack the mod manager's own
+      -- options UI wasn't necessarily expecting to receive a push from,
+      -- unlike the Start Menu (an established, already-working push
+      -- site for SilphNetStatus/SilphNetNearby above). Moving About to
+      -- its own Start Menu row - the exact same site the two rows above
+      -- already use successfully - sidesteps that entirely rather than
+      -- trying to debug the options screen's own push handling.
+      -- Global (self-inclusive) online-players row - moved here from the
+      -- status screen's A:FRIENDS hint line, which now shows a
+      -- friends-only count instead (see countFriendsOnline()).
+      -- Deliberately its own separate row, not folded onto any of the
+      -- two above - the whole reason this moved at all was that the
+      -- friends-list-adjacent hint line was easy to misread as a
+      -- friends-online count when it was really global and
+      -- self-inclusive, so this stays on a screen that has nothing to do
+      -- with friends at all.
+      --
+      mod.ui.insertBefore(items, "QUIT", { label = "SN ONLINE",
+        onSelect = function() mod.ui.push(g, "SilphNetOnline") end })
+      -- SN RECOVER ACCT stays its OWN top-level row, conditional on
+      -- hasEmail == false - deliberately NOT folded into SN MORE below.
+      -- This row is self-removing: the moment the account gets a
+      -- recovery email on file (via the website), it disappears from
+      -- the Start Menu on its own, so unlike About/Milestones it's never
+      -- permanent clutter for the vast majority of players who never see
+      -- it at all. Burying it inside SN MORE would only ever cost the
+      -- one player who's actually locked out - exactly the moment an
+      -- extra menu layer hurts most - for a decluttering benefit nobody
+      -- else would even notice, since it's already invisible to everyone
+      -- who doesn't need it.
+      if hasEmail == false then
+        mod.ui.insertBefore(items, "QUIT", { label = "SN RECOVER ACCT",
+          onSelect = function() mod.ui.push(g, "SilphNetRecoverAcct") end })
+      end
+      -- SN MORE - a single row opening a small submenu (About /
+      -- Milestones), rather than each of those getting its own top-level
+      -- Start Menu row. Reported directly as a real usability problem,
+      -- not a design nitpick: this project's own "each major feature
+      -- gets its own row" convention (see SN NEARBY's comment above) was
+      -- fine while there were 2-3 SilphNet rows, but by the time
+      -- MILESTONES/ABOUT were both separate rows on top of
+      -- STATUS/NEARBY/ONLINE, the Start Menu had grown to 5-6 SilphNet
+      -- rows - "the main menu is now getting full of SN stuff." STATUS,
+      -- NEARBY, and ONLINE stay top-level (core, frequently-used
+      -- gameplay features); About/Milestones are both comparatively
+      -- low-frequency/informational (and, unlike Recover Acct, ALWAYS
+      -- visible once logged in - real, permanent clutter, not a rare
+      -- conditional row), so those two are the ones that moved.
+      mod.ui.insertBefore(items, "QUIT", { label = "SN MORE",
+        onSelect = function() mod.ui.push(g, "SilphNetMore") end })
     end)
     return nextFn(g, items)
   end)
@@ -3797,10 +3922,7 @@ return function(mod)
           if g.input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
-          -- Reflowed for the v1.17.0 modern layout - title moves into the
-          -- header band, content on a 12px grid starting at y=22 instead
-          -- of the old 8/16px-exact packed rows. Text/logic unchanged.
-          --
+          Font.drawBox(0, 0, 20, 18)
           -- Uppercase throughout, not each link's real casing - Gen 1's
           -- GB font is uppercase-only in most contexts (menus, most
           -- dialogue; a few special text boxes support lowercase in the
@@ -3810,73 +3932,67 @@ return function(mod)
           -- actually supports lowercase - if confirmed, these could go
           -- back to their real casing (ashjamgram, ashjam, etc.).
           --
+          -- GitHub/Instagram/TikTok added directly on request ("Include
+          -- all the details you have there, and github and socials
+          -- aswell") - each shown as a short label + the real handle,
+          -- same left-label style already used elsewhere in this file.
+          -- No Discord row - not created yet as of this addition; add
+          -- one here once it exists rather than showing a handle that
+          -- doesn't resolve to anything.
+          --
           -- GitHub shown as just the handle ("GH ASHJAMB"), not the full
-          -- "AshJamB/SilphNet" repo path - see the earlier version of
-          -- this comment for the full reasoning (kept out of the way of
-          -- this reflow, unchanged in substance).
-          snBegin("SILPHNET")
-          Font.draw("ASH BRITTAIN", 16, 22)
-          Font.draw("(ASHJAM)", 16, 34)
-          Font.draw("ASH.JAMTV.CO.UK", 16, 46)
-          Font.draw("GH ASHJAMB", 16, 58)
-          Font.draw("IG @ASHJAMGRAM", 16, 70)
-          Font.draw("TT @ASHJAM", 16, 82)
+          -- "AshJamB/SilphNet" repo path - the full path is exactly 16
+          -- chars (fits with zero margin), but using it here would have
+          -- meant dropping "THANKS FOR PLAYING!" to stay within the
+          -- box's 144px limit, and keeping that line (already part of
+          -- this screen before this change) mattered more than spelling
+          -- out the repo name in full - the handle alone is enough to
+          -- find the right GitHub profile.
+          Font.draw("- SILPHNET -", 16, 8)
+          Font.draw("ASH BRITTAIN", 16, 24)
+          Font.draw("(ASHJAM)", 16, 32)
+          Font.draw("ASH.JAMTV.CO.UK", 16, 48)
+          Font.draw("GH ASHJAMB", 16, 64)
+          Font.draw("IG @ASHJAMGRAM", 16, 80)
+          Font.draw("TT @ASHJAM", 16, 96)
           -- :sub(1,16) here is a real, not purely defensive, safeguard -
           -- unlike most other :sub(1,16) calls in this file, a future
           -- version number genuinely could push this line past 16 chars
           -- (e.g. "PLAYING! V10.10.10" is 18 chars), where every other
           -- capped line in this file is only ever at risk from unusually
           -- long real-world input, not its own version string growing.
-          Font.draw("THANKS FOR", 16, 94)
-          Font.draw(("PLAYING! V" .. tostring(mod.version or "?")):sub(1, 16), 16, 106)
-          Font.draw("B:BACK", 16, SN_FOOTER_Y1)
+          Font.draw("THANKS FOR", 16, 112)
+          Font.draw(("PLAYING! V" .. tostring(mod.version or "?")):sub(1, 16), 16, 120)
+          Font.draw("B:BACK", 16, 128)
         end
         return self
       end,
     })
   end)
 
-  -- SILPHNET home screen - the single Start Menu row's own destination
-  -- (see that row's comment above). v1.17.0 replaces the previous
-  -- STATUS/NEARBY/ONLINE/RECOVER ACCT top-level rows plus the separate
-  -- "SN MORE" submenu (About/Milestones/Report Bug) with ONE flat list
-  -- here - same plain UP/DOWN + A/B list shape SN MORE used, just now
-  -- covering every SilphNet destination in one place instead of splitting
-  -- them across the Start Menu itself and a second nested submenu.
-  -- RECORDS pushes "SilphNetLeagueSign" directly - that screen's own
-  -- new(g) only ever reads the game object (see its registration further
-  -- down in this file), so it's just as safe to open from here as from
-  -- the world sign that already pushes it; nothing about that screen
-  -- changed to support this, it was already reachable this way.
+  -- SN MORE - the submenu SN MORE's own Start Menu row opens (see that
+  -- row's own comment for why this exists). A plain UP/DOWN + A/B list
+  -- menu, the same shape the naming-grid/options screens elsewhere in
+  -- this engine already use for "pick one of a few things" - nothing
+  -- about this needs to be more elaborate than that. Deliberately does
+  -- NOT include RECOVER ACCT - that row stays its own top-level,
+  -- conditional Start Menu entry (see its own comment above, right
+  -- where it's inserted) precisely because it's self-removing and
+  -- rare, unlike About/Milestones which are permanent, always-visible
+  -- clutter once logged in.
   pcall(function()
-    mod.content.screens:register("SilphNetHome", {
+    mod.content.screens:register("SilphNetMore", {
       new = function(g)
         local Font = mod.ui.Font
         local self = { game = g, isOpaque = true, index = 1 }
         local function items()
           local list = {}
-          list[#list + 1] = { label = "STATUS", screen = "SilphNetStatus" }
-          list[#list + 1] = { label = "NEARBY", screen = "SilphNetNearby" }
-          list[#list + 1] = { label = "ONLINE", screen = "SilphNetOnline" }
-          list[#list + 1] = { label = "RECORDS", screen = "SilphNetLeagueSign" }
           list[#list + 1] = { label = "MILESTONES", screen = "SilphNetMilestones" }
-          list[#list + 1] = { label = "ABOUT", screen = "SilphNetAbout" }
           list[#list + 1] = { label = "REPORT BUG", screen = "SilphNetReportBug" }
-          -- Conditional, self-removing row - same reasoning as the old
-          -- top-level "SN RECOVER ACCT" row: only shown while the
-          -- account has no recovery email on file, and disappears on its
-          -- own the moment one gets set (see hasEmail's own comment
-          -- elsewhere in this file).
-          if hasEmail == false then
-            list[#list + 1] = { label = "RECOVER ACCT", screen = "SilphNetRecoverAcct" }
-          end
+          list[#list + 1] = { label = "ABOUT", screen = "SilphNetAbout" }
           return list
         end
         function self:update(dt)
-          -- Drains here too, same reasoning as the old Start Menu hook -
-          -- this is now the screen a fresh login's label-dependent state
-          -- (STATUS row aside, RECOVER ACCT's visibility) can sit on.
-          pcall(drainHttpResults)
           local list = items()
           local n = #list
           if self.index > n then self.index = 1 end
@@ -3895,20 +4011,28 @@ return function(mod)
           if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
-          snBegin("SILPHNET")
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("SN MORE", 16, 8)
           local list = items()
           for i, it in ipairs(list) do
-            local y = 22 + (i - 1) * 11
-            if i == self.index then
-              love.graphics.setColor(0.24, 0.34, 0.50, 1)
-              love.graphics.rectangle("fill", 4, y - 2, SN_W - 8, 11)
-              love.graphics.setColor(1, 1, 1, 1)
-            end
-            Font.draw(it.label:sub(1, 16), 12, y)
+            -- Wraps the selected row in "(" ")" rather than a leading
+            -- ">" - see this screen's own bugfix note in mod.card. ">"
+            -- turned out to not be in this font's glyph set at all, so
+            -- it silently drew as blank space. A leading "-" was tried
+            -- next, but "-" already means something specific elsewhere
+            -- in this same mod (SilphNetMilestones marks a LOCKED
+            -- milestone with "- ") - reusing it here as "selected"
+            -- risked a second, different confusion instead of fixing
+            -- the first one. Parentheses aren't used as a marker
+            -- anywhere else in this file, so there's no such collision,
+            -- and "(" "/" ")" are both already confirmed rendering
+            -- correctly elsewhere ("- NEARBY (n) -").
+            local label = it.label:sub(1, 14)
+            local shown = (i == self.index) and ("(" .. label .. ")") or ("  " .. label)
+            Font.draw(shown, 16, 16 + i * 8)
           end
-          love.graphics.setColor(1, 1, 1, 1)
-          Font.draw("A:OPEN UD:MOVE", 16, SN_FOOTER_Y1)
-          Font.draw("B:BACK", 16, SN_FOOTER_Y2)
+          Font.draw("A:OPEN UD:MOVE", 16, 120)
+          Font.draw("B:BACK", 16, 128)
         end
         return self
       end,
@@ -3931,14 +4055,13 @@ return function(mod)
           if g.input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
-          -- Reflowed for the v1.17.0 modern layout - title moves into the
-          -- header band, content on a 12px grid. Text/logic unchanged.
-          snBegin("MILESTONES")
+          Font.drawBox(0, 0, 20, 18)
+          Font.draw("SN MILESTONES", 16, 8)
           local unlocked = 0
           for _, def in ipairs(MILESTONE_DEFS) do
             if isMilestoneUnlocked(def.key) then unlocked = unlocked + 1 end
           end
-          Font.draw(("UNLOCKED " .. unlocked .. "/" .. #MILESTONE_DEFS):sub(1, 16), 16, 22)
+          Font.draw(("UNLOCKED " .. unlocked .. "/" .. #MILESTONE_DEFS):sub(1, 16), 16, 16)
           for i, def in ipairs(MILESTONE_DEFS) do
             -- "X " for unlocked, "- " for not yet - two real ASCII
             -- characters, not a checkmark glyph (this font's real glyph
@@ -3948,9 +4071,9 @@ return function(mod)
             -- confirmed against the engine's real Font.lua, and a
             -- checkmark hasn't been).
             local mark = isMilestoneUnlocked(def.key) and "X " or "- "
-            Font.draw((mark .. def.label):sub(1, 16), 16, 36 + (i - 1) * 12)
+            Font.draw((mark .. def.label):sub(1, 16), 16, 24 + i * 8)
           end
-          Font.draw("B:BACK", 16, SN_FOOTER_Y1)
+          Font.draw("B:BACK", 16, 128)
         end
         return self
       end,
@@ -4143,15 +4266,13 @@ return function(mod)
           if input:wasPressed("b") then g.stack:pop() end
         end
         function self:draw()
-          -- Reflowed for the v1.17.0 modern layout - title moves into the
-          -- header band, content sits on a 14px grid with real clearance
-          -- above the footer divider. Text/logic unchanged.
+          Font.drawBox(0, 0, 20, 18)
           if onlineByVersion == nil then
             -- Same "nil means haven't heard back yet" convention as
             -- onlineCount/friendDetail/etc elsewhere in this file -
             -- distinct from a genuine zero-everywhere answer.
-            snBegin("ONLINE")
-            Font.draw("CHECKING...", 16, 46)
+            Font.draw("- ONLINE -", 16, 8)
+            Font.draw("CHECKING...", 16, 72)
           elseif self.verPage <= 1 then
             -- Two summary pages, split by generation (isGen2()) - used to
             -- be one page listing every tracked version together, but a
@@ -4177,13 +4298,13 @@ return function(mod)
                 rows[#rows + 1] = v
               end
             end
-            snBegin(isGen1Page and "ONLINE - GEN 1" or "ONLINE - GEN 2")
-            Font.draw(("TOTAL ONLINE: " .. total):sub(1, 16), 16, 22)
+            Font.draw(("TOTAL ONLINE: " .. total):sub(1, 16), 16, 8)
+            Font.draw(isGen1Page and "- GEN 1 -" or "- GEN 2 -", 16, 24)
             for i, v in ipairs(rows) do
-              Font.draw((v.game_version .. ": " .. v.count):sub(1, 16), 16, 38 + (i - 1) * 14)
+              Font.draw((v.game_version .. ": " .. v.count):sub(1, 16), 16, 40 + (i - 1) * 16)
             end
-            if #onlineByVersion > 0 then Font.draw("LR:PAGE", 16, SN_FOOTER_Y1) end
-            Font.draw("B:BACK", 16, SN_FOOTER_Y2)
+            if #onlineByVersion > 0 then Font.draw("LR:PAGE", 16, 120) end
+            Font.draw("B:BACK", 16, 128)
             return
           else
             -- Per-version page: title is "<VERSION> ONLINE" (e.g. "RED
@@ -4193,7 +4314,8 @@ return function(mod)
             -- answered the same way, just scoped to a game version
             -- instead of a map.
             local v = onlineByVersion[self.verPage - 1]
-            snBegin((v.game_version .. " ONLINE"):sub(1, 16))
+            local title = (v.game_version .. " ONLINE"):sub(1, 16)
+            Font.draw(title, 16, 8)
             -- Checked against #v.players (the actual array length),
             -- NOT v.count - v.count is a server-reported convenience
             -- field that SHOULD always match #v.players, but indexing
@@ -4208,12 +4330,12 @@ return function(mod)
             local n = #v.players
             if self.playerIndex > n then self.playerIndex = 1 end
             if n == 0 then
-              Font.draw("NONE ONLINE", 16, 34)
+              Font.draw("NONE ONLINE", 16, 40)
             else
               local p = v.players[self.playerIndex]
-              Font.draw((self.playerIndex) .. "/" .. n, 16, 22)
-              Font.draw((p.name or "?"):sub(1, 16), 16, 34)
-              Font.draw("ID   " .. (p.trainer_id or "-----"), 16, 46)
+              Font.draw((self.playerIndex) .. "/" .. n, 16, 24)
+              Font.draw((p.name or "?"):sub(1, 16), 16, 48)
+              Font.draw("ID   " .. (p.trainer_id or "-----"), 16, 56)
               -- The caller's own entry is included in this list now (see
               -- online_by_version.php - this screen answers "how many
               -- people total are online, including me", not just
@@ -4228,14 +4350,22 @@ return function(mod)
               -- show an ADD FRIEND hint on your own row in the first
               -- place.
               if p.is_you == "true" then
-                Font.draw("(YOU)", 16, 58)
+                Font.draw("(YOU)", 16, 72)
               elseif isAlreadyFriend(p.account_id) then
-                Font.draw("ALREADY A FRIEND", 16, 58)
+                Font.draw("ALREADY A FRIEND", 16, 72)
               else
-                Font.draw("NOT YET A FRIEND", 16, 58)
-                -- START jumps straight to Add Friend with this player's
-                -- Trainer ID already filled in (see self:update above).
-                Font.draw("START:ADD FRIEND", 16, 70)
+                Font.draw("NOT YET A FRIEND", 16, 72)
+                -- Was "RIGHT:ADD FRIEND" / "ON STATUS SCREEN" - the exact
+                -- bug reported directly against this screen: RIGHT is
+                -- ALREADY bound here (paging to the next tracked game
+                -- version), so the hint read as an instruction to press
+                -- RIGHT to add this friend when RIGHT does something
+                -- else entirely. Same upgrade as SN NEARBY: START was
+                -- genuinely free on this screen too, so it now pushes
+                -- SilphNetAddFriend with this player's Trainer ID
+                -- already filled in (see self:update above) instead of
+                -- just describing where to go.
+                Font.draw("START:ADD FRIEND", 16, 80)
               end
             end
           end
@@ -4248,12 +4378,12 @@ return function(mod)
             -- "don't advertise a control that does nothing right now"
             -- rule SilphNetNearby's own LEFT/RIGHT:PAGE hint follows.
             if v and #v.players > 1 then
-              Font.draw("LR:VER UD:PAGE", 16, SN_FOOTER_Y1)
+              Font.draw("LR:VER UD:PAGE", 16, 112)
             else
-              Font.draw("LR:VERSION", 16, SN_FOOTER_Y1)
+              Font.draw("LR:VERSION", 16, 112)
             end
           end
-          Font.draw("B:BACK", 16, SN_FOOTER_Y2)
+          Font.draw("B:BACK", 16, 128)
         end
         return self
       end,
