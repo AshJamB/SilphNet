@@ -1,4 +1,4 @@
--- SilphNet - async presence + friends (v1.17.2)
+-- SilphNet - async presence + friends (v1.17.3)
 -- =============================================================================
 -- See where your friends were last, without a live server. No real-time
 -- movement, no persistent process anywhere - this only ever talks to a
@@ -2180,6 +2180,8 @@ return function(mod)
     { key = "crowded",        label = "CROWDED" },
     { key = "nearby_friend",  label = "FRIEND NEARBY" },
     { key = "thousand_tiles", label = "1000 TILES" },
+    { key = "dex_half",       label = "DEX 50%" },
+    { key = "dex_complete",   label = "DEX COMPLETE" },
   }
   local function isMilestoneUnlocked(key)
     local ok, v = pcall(function() return mod.save:get("milestone_" .. key) end)
@@ -2210,6 +2212,24 @@ return function(mod)
       end
     end
     if tilesWalked >= 1000 then unlockMilestone("thousand_tiles") end
+    -- DEX 50% / DEX COMPLETE - same pct calculation the SN RECORDS dex
+    -- category's own local fallback already uses (readStatsSnapshot's
+    -- pokedexCaught against 151/251 depending on generation, see
+    -- isGen2's own comment) - reused here rather than re-derived, so
+    -- there's exactly one place in this file that knows how a dex
+    -- percentage is computed. This is THIS save's own reading, same as
+    -- every other milestone here - not the best-across-saves number SN
+    -- RECORDS shows, since a milestone is "did I personally do this",
+    -- not a leaderboard figure.
+    pcall(function()
+      local snap = readStatsSnapshot()
+      if snap and snap.pokedexCaught then
+        local total = isGen2(gameVersion) and 251 or 151
+        local pct = math.floor((snap.pokedexCaught / total) * 100 + 0.5)
+        if pct >= 50 then unlockMilestone("dex_half") end
+        if pct >= 100 then unlockMilestone("dex_complete") end
+      end
+    end)
   end
 
   -- Reconciles the friend-marker set against `friends` + the current map -
@@ -4063,10 +4083,11 @@ return function(mod)
   -- SN MILESTONES - read-only, no fetch, nothing that can be
   -- "CHECKING..." - same simplicity as SilphNetAbout right above this,
   -- since every milestone is checked/unlocked entirely locally (see
-  -- checkMilestones' own comment). All 5 entries plus a title/count line
-  -- fit comfortably in one static screen with real room to spare, so no
-  -- paging is needed here, unlike every leaderboard-style screen in this
-  -- file.
+  -- checkMilestones' own comment). All 7 entries (5 original + DEX 50%/
+  -- DEX COMPLETE) plus a title/count line still fit comfortably in one
+  -- static screen with real room to spare (last row lands at y=80,
+  -- nowhere near the y=128 footer), so no paging is needed here, unlike
+  -- every leaderboard-style screen in this file.
   pcall(function()
     mod.content.screens:register("SilphNetMilestones", {
       new = function(g)
